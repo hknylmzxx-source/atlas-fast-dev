@@ -647,7 +647,10 @@ def stop_shape(role,wire):
     payload("STOP",wire)
     return "POST","/fapi/v1/algoOrder"
 
-def one_write(venue,role,wire,scope):
+def one_write(venue,role,wire,scope,owner_approved_at=None):
+    # ENTRY requires a monotonic timestamp for owner approval; STOP/TP are unaffected.
+    if role=="ENTRY" and owner_approved_at is None:
+        raise PreSendRefused("OWNER_APPROVAL_TIME_REQUIRED_NO_WRITE")
     # 045 G4: a real venue writes only for the armed one-use trade token (certain refusal: no WAL)
     if type(venue) is SignedVenue and _live_token_ok(getattr(venue,"_trade_token",None)) is not True:
         raise PreSendRefused("LIVE_TRADE_TOKEN_REQUIRED_NO_WRITE")
@@ -659,6 +662,12 @@ def one_write(venue,role,wire,scope):
     venue.acquire_mutation_lease()
     sent_phase=False
     try:
+        if role=="ENTRY":
+            try:
+                _require_fresh_owner_approval(owner_approved_at,"UNDER_MUTATION_LEASE")
+            except Blocked:
+                # No WAL was written and no POST was attempted; certain refusal.
+                raise PreSendRefused("OWNER_APPROVAL_EXPIRED_UNDER_LEASE_NO_WRITE") from None
         try:
             journal(role,hashlib.sha256((scope+role+name).encode()).hexdigest(),{
                 "scope":scope,"symbol":wire["symbol"],"client_id":name})
@@ -903,6 +912,26 @@ INPUT_FUNCTIONS=("policy_gate","policy_market","signed_income_envelope","stop_gu
 
 def _now_ms():
     return int(time.time()*1000)
+
+OWNER_APPROVAL_MAX_AGE_S = 15
+
+def _require_fresh_owner_approval(approved_at, stage):
+    """Never enter an order mutation with an expired one-use owner approval."""
+    if type(approved_at) not in (int, float):
+        raise Blocked("OWNER_APPROVAL_TIME_MISSING_" + stage)
+    elapsed = time.monotonic() - approved_at
+    if not 0 <= elapsed <= OWNER_APPROVAL_MAX_AGE_S:
+        raise Blocked("OWNER_APPROVAL_EXPIRED_" + stage)
+
+def _check_approval_after_reservation(approved_at, gate, inputs, venue, bundle, scope):
+    """If reservation exists but consent has aged out, settle zero-entry or keep blocked."""
+    try:
+        _require_fresh_owner_approval(approved_at, "AFTER_RESERVATION")
+    except Blocked:
+        # Reuse the existing fail-closed zero-fill settle path, never send ENTRY.
+        # If signed FLAT or income evidence is unavailable, ledger stays OPENED.
+        policy_settle_after_flat(gate, inputs, venue, bundle, scope, "0")
+        raise
 
 def _policy_inputs_market_last(inputs, venue, bundle, account):
     """Collect income first and then the fresh market snapshot.
@@ -1361,16 +1390,20 @@ def run_once(bundle):
                               for p in account["positions"]):
             raise Blocked("ACCOUNT_NOT_FLAT_AFTER_OWNER_APPROVAL")
         risk_authority(venue,bundle,account)
-        if time.monotonic()-approved_at>15:
-            raise Blocked("OWNER_APPROVAL_TIMED_OUT_BEFORE_ENTRY")
+        _require_fresh_owner_approval(approved_at,"BEFORE_SECOND_MARKET")
         # F3: real reservation right before ENTRY, computed risk only.
         market, envelope, timing = _policy_inputs_market_last(inputs,venue,bundle,account)
         try:
+            _require_fresh_owner_approval(approved_at,"AFTER_SECOND_MARKET_BEFORE_RESERVATION")
             risk_ledger_entry_gate(phase,bundle,market,envelope,scope,gate=gate)
         except Blocked as error:
             raise Blocked(str(error)+_policy_timing_suffix("RESERVE",timing)) from None
+        # Reservation may consume time. Expired consent must not reach ENTRY;
+        # close the zero-fill reservation using the existing signed-FLAT path.
+        _check_approval_after_reservation(approved_at,gate,inputs,venue,bundle,scope)
         try:
-            entry_receipt=one_write(venue,"ENTRY",bundle["entry"],scope)
+            entry_receipt=one_write(venue,"ENTRY",bundle["entry"],scope,
+                                    owner_approved_at=approved_at)
         except PreSendRefused:
             # nothing was sent: settle the reservation with zero fill
             policy_settle_after_flat(gate,inputs,venue,bundle,scope,"0")

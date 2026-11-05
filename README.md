@@ -21,6 +21,19 @@ Altı adet geçmiş `EXCHANGE_INFO_STALE_OR_CLOCK_MISMATCH` reddi aynı `run_onc
 
 Çevrimdışı regresyon testleri: `python3 -B -m unittest discover -s tests -v`.
 
+## Üçüncü geliştirme paketi — onay süresi ve rezervasyon güvenliği
+
+Owner'ın tek kullanımlık onayı için **15 saniyelik** mevcut zaman sınırı değiştirilmedi.
+
+- İkinci piyasa/veri sorgusu öncesi ve sonrasında onay yaşı tekrar ölçülür.
+- Risk rezervasyonu başarılı olduktan sonra yeniden kontrol yapılır. Süre aşılmışsa ENTRY yazılmaz ve mevcut `policy_settle_after_flat(..., "0")` prosedürü çağrılır; yeterli borsa kanıtı yoksa rezervasyon bloke kalır.
+- `one_write(..., role="ENTRY")` onay zaman damgasını zorunlu tutar. Yürütücünün mutasyon kilidi alındıktan **sonra**, emir günlüğü ve POST öncesinde onay yeniden doğrulanır. Süre aşılırsa `PreSendRefused` çıkar; ne jurnal satırı ne de ENTRY POST'u üretilir.
+- STOP/TP emirlerine ENTRY onayı için ek yaş şartı uygulanmaz; mevcut koruyucu emir davranışı korunur.
+
+**Sınır:** Kontrol, mutasyon kilidi alındıktan sonra fakat journal yazmadan önce yapılır. Journal/transport adımları arasında geçen mikro-gecikme için mutlak anlık garanti vermez; canlı entegrasyon onayı ve daha kapsamlı güvenlik testleri olmadan dağıtıma uygun kabul edilmez.
+
+Test: `python3 -B -m unittest discover -s tests -v` (AST ile yalnız işlevler + tamamen sahte venue).
+
 ## Güvenlik ve sınırlar
 
 Testler saf fonksiyonları ve yürütücünün AST'den **yalnız risk ve piyasa-verisi toplama fonksiyonlarını** sahte borsa yanıtlarıyla çalıştırır. Owner uygulaması, ağ bağlantısı, şifre, imzalı GET veya gerçek POST/DELETE testi yapılmaz. Tüm entegre testler ve canlıya alma ayrı inceleme gerektirir.
