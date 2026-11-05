@@ -76,6 +76,12 @@ Teknik rapor: `SDK_OFFLINE_INTEGRATION_20261105.md`.
 
 Yedi paket tek bir **yerel Git sürüm adayı** olarak `atlas-fast-v0.1.0-rc1-offline-20261105` etiketiyle tanımlanır. Belgeler: `RELEASE_CANDIDATE_20261105.md`, `GO_NO_GO_CHECKLIST_20261105.md` ve `RC_SOURCE_HASHES_20261105.json`. Sürümün kararı **NO-GO FOR LIVE** olup GitHub'a gönderim, aktif Owner SDK güncellemesi, canlı Binance emir izni veya risk ayarı değişikliği içermez.
 
+## Sekizinci geliştirme paketi — tam `run_once` ağsız akış testi
+
+`tests/test_run_once_full_flow_offline.py`, gerçek `run_once` fonksiyonunu AST üzerinden izole olarak çalıştırır; tüm dış bağlantılar (telefon grant, live R2, Binance venue, ENTRY/STOP/TP, policy, WAL, ağ, observer) sahte bağımlılıktır. Normal sıralama ve 16 ayrı hata/engelleme yolu olmak üzere **17 yeni senaryo**; toplam **132/132** çevrimdışı test başarılı.
+
+Bu bir **kontrol akışı simülasyonudur**, gerçek giriş emri veya güvenlik kapısı onayı değildir. `atlas-fast-v0.1.0-rc1-offline-20261105` etiketi değişmez, yeni adımlar sadece geliştirme dalındadır. Ayrıntılar: `RUN_ONCE_OFFLINE_FLOW_20261105.md`.
+
 ## Güvenlik ve sınırlar
 
 Testler yalnızca seçilmiş yürütücü fonksiyonlarını AST üzerinden ve ayrı kopyalanan STOP/yeniden başlatma modüllerini sentetik borsa yanıtlarıyla çalıştırır. Owner uygulaması, ağ bağlantısı, şifre, imzalı GET veya gerçek POST/DELETE testi yapılmaz. Tüm entegre testler ve canlıya alma ayrı inceleme gerektirir.
