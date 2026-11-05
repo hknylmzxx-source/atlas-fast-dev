@@ -1,0 +1,25 @@
+{
+  "contains_keys": false,
+  "created_utc": "2026-11-05T08:45:49.015405+00:00",
+  "mode": "OFFLINE_DEVELOPMENT_ONLY",
+  "origin": "READ_ONLY_SNAPSHOT_OF_OWNER_SDK_SELECTED_PYTHON_SOURCE_FILES",
+  "prohibited_live_usage": true,
+  "selected_files": [
+    {
+      "name": "order_filters.py",
+      "sha256": "6a9585b47b56426f227ee50a8aadde7a371bd7e3ce5d34170a7998bddcd28bef"
+    },
+    {
+      "name": "policy_integration.py",
+      "sha256": "877d9030950aa6d03f31d60e44d622572888ae9ef74173335ffc849b41104b91"
+    },
+    {
+      "name": "owner_single_execution.py",
+      "sha256": "3015b35585a67841b3673e2718148568ae12df5071f71fbe4de5b1fdeabc9765"
+    },
+    {
+      "name": "atlas_integration_inputs_core.py",
+      "sha256": "1e071e39c6c7a6a982450e4bd4d577e2eb49a7fb5fe77352e6da882e89000110"
+    }
+  ]
+}
