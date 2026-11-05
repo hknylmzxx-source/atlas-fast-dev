@@ -29,6 +29,8 @@ NAMES={
     "_restart_wal_records",
     "startup_reconcile",
     "mark_scope_resolved",
+    "_resolve_verified_zero_entry_scope",
+    "_settle_zero_entry_and_resolve",
 }
 SELECTED=[n for n in TREE.body if isinstance(n,ast.FunctionDef) and n.name in NAMES]
 assert len(SELECTED)==len(NAMES)
@@ -50,6 +52,7 @@ PLAN={"symbol":SYM,"clientAlgoId":STOP_ID,"side":"SELL",
 ALGO=dict(PLAN,algoStatus="NEW",orderType="STOP_MARKET",closePosition="true")
 
 class Blocked(RuntimeError):pass
+class OrderNotFound(Exception):pass
 class PreSendRefused(Blocked):pass
 class LeaseRefused(PreSendRefused):
     def __init__(self,msg,transient=False):
@@ -66,6 +69,16 @@ class FakeVenue:
         self.post_calls=[]
         self.lease=0
         self.outage=False
+        self.order_query_status="NOT_FOUND"
+
+    def read(self,method,**kwargs):
+        if method!="query_order":
+            raise AssertionError("UNEXPECTED_SIGNED_GET")
+        if self.outage or self.order_query_status=="TIMEOUT":
+            raise TimeoutError("OFFLINE_EXACT_ORDER_GET_TIMEOUT")
+        if self.order_query_status=="NOT_FOUND":
+            raise OrderNotFound("OFFLINE_EXACT_ORDER_DOES_NOT_EXIST")
+        return {"symbol":SYM,"clientOrderId":ENTRY_ID,"status":"FILLED"}
 
     def acquire_mutation_lease(self):
         self.lease+=1
@@ -110,6 +123,13 @@ class FakeGate:
         self.open=False
         self.close_count=0
         self.settle_fail=False
+        self.closed_event=None
+        self.opened_event={"type":"OPENED","scope":SCOPE,"at_ms":500000}
+
+    def _scope_events(self,scope):
+        if scope!=SCOPE:
+            raise Blocked("OFFLINE_SCOPE_MISMATCH")
+        return self.opened_event,self.closed_event
 
     def pending_scopes(self):
         return [{"scope":SCOPE,"state":"OPENED"}] if self.open else []
@@ -124,7 +144,11 @@ class FakeGate:
             raise Blocked("OFFLINE_NOT_FLAT")
         self.open=False
         self.close_count+=1
-        return {"state":"CLOSED","risk_exceeded":False}
+        self.closed_event={"type":"CLOSED","scope":scope,
+            "realized_pnl_usdt":"0",
+            "source":"SIGNED_INCOME_REALIZED_PNL","close_time_ms":local_now_ms}
+        return {"state":"CLOSED","event":self.closed_event,
+                "risk_exceeded":False,"already_settled":False}
 
 class FakeInputs:
     def __init__(self,sim):
@@ -159,6 +183,7 @@ class Integration:
             "LOG":self.wal,
             "PRIVATE":self.private,
             "Blocked":Blocked,
+            "OrderNotFound":OrderNotFound,
             "PreSendRefused":PreSendRefused,
             "LeaseRefused":LeaseRefused,
             "SignedVenue":SignedVenue,
@@ -248,7 +273,7 @@ class EndToEndSafetyChainTests(unittest.TestCase):
     def tearDown(self):
         self.s.close()
 
-    def test_expired_approval_after_reservation_cannot_post_and_wal_blocks(self):
+    def test_expired_approval_after_reservation_settles_and_exactly_resolves(self):
         s=self.s
         bundle=s.reserve()
         s.now=116.0
@@ -259,10 +284,14 @@ class EndToEndSafetyChainTests(unittest.TestCase):
         self.assertFalse(s.gate.open)
         self.assertEqual(s.venue.post_calls,[])
         report,_=s.gate_report()
-        # Ledger is closed, but the reservation WAL needs independent review.
-        self.assertFalse(report["entries_allowed"])
-        self.assertTrue(report["startup_gate"].startswith("BLOCKED:"))
-        self.assertFalse((s.wal/("resolved_"+SCOPE+".json")).exists())
+        # Only all four independent proofs permit the reserve-only WAL marker:
+        # zero-fill signed income, closed ledger, exact order-not-found, fresh flat.
+        self.assertTrue(report["entries_allowed"])
+        self.assertEqual(report["startup_gate"],"PASS")
+        marker=s.wal/("resolved_"+SCOPE+".json")
+        self.assertTrue(marker.is_file())
+        self.assertEqual(json.loads(marker.read_text())["outcome"],
+                         "ZERO_ENTRY_SIGNED_FLAT_AND_LEDGER_CLOSED")
 
     def test_expired_approval_with_income_outage_leaves_ledger_and_incident(self):
         s=self.s
@@ -337,6 +366,158 @@ class EndToEndSafetyChainTests(unittest.TestCase):
         self.assertEqual(report["policy"],"RECONCILED")
         self.assertTrue(report["entries_allowed"])
         self.assertEqual(len(s.venue.post_calls),2)  # simulated ENTRY and STOP
+
+class ZeroEntryResolutionProofTests(unittest.TestCase):
+    """The local WAL marker is never written on incomplete zero-entry evidence."""
+    def setUp(self):
+        self.s=Integration()
+        self.s.reserve()
+        self.settled=self.s.ns["policy_settle_after_flat"](
+            self.s.gate,self.s.inputs,self.s.venue,{"entry":{"symbol":SYM}},SCOPE,"0")
+        self.assertEqual(self.settled["event"]["type"],"CLOSED")
+
+    def tearDown(self):
+        self.s.close()
+
+    def _reject(self,message):
+        with self.assertRaisesRegex(Blocked,message):
+            self.s.ns["_resolve_verified_zero_entry_scope"](
+                self.s.gate,self.s.venue,{"entry":ENTRY},SCOPE,self.settled)
+        self.assertFalse((self.s.wal/("resolved_"+SCOPE+".json")).exists())
+
+    def test_exact_signed_query_timeout_keeps_wal_blocked(self):
+        self.s.venue.order_query_status="TIMEOUT"
+        self._reject("ZERO_ENTRY_SIGNED_ORDER_ABSENCE_UNVERIFIED")
+
+    def test_exchange_order_found_even_if_currently_flat_keeps_wal(self):
+        self.s.venue.order_query_status="FOUND"
+        self._reject("ZERO_ENTRY_ORDER_FOUND_UNEXPECTED")
+
+    def test_new_position_after_ledger_settle_keeps_wal(self):
+        self.s.venue.position="79"
+        self._reject("ZERO_ENTRY_FRESH_FLAT_READ_UNVERIFIED")
+
+    def test_open_stop_after_ledger_settle_keeps_wal(self):
+        self.s.venue.stop_open=True
+        self._reject("ZERO_ENTRY_FRESH_FLAT_READ_UNVERIFIED")
+
+    def test_another_symbol_open_position_keeps_wal(self):
+        base=self.s.snapshot
+        def with_foreign_position(venue):
+            account,normal,algo=base(venue)
+            account["positions"].append({
+                "symbol":"OTHERUSDT","positionSide":"BOTH","positionAmt":"2"})
+            return account,normal,algo
+        self.s.ns["snapshot"]=with_foreign_position
+        self._reject("ZERO_ENTRY_FRESH_FLAT_READ_UNVERIFIED")
+
+    def test_entry_wal_present_even_with_flat_and_closed_ledger_keeps_wal(self):
+        self.s.journal("ENTRY","TEST-WAL",{"scope":SCOPE,"symbol":SYM,
+                                          "client_id":ENTRY_ID})
+        self._reject("ZERO_ENTRY_SCOPE_HAS_OTHER_WAL_OR_INCIDENT")
+
+    def test_stop_wal_present_keeps_wal(self):
+        self.s.journal("STOP","TEST-WAL",{"scope":SCOPE,"symbol":SYM,
+                                         "client_id":STOP_ID})
+        self._reject("ZERO_ENTRY_SCOPE_HAS_OTHER_WAL_OR_INCIDENT")
+
+    def test_incident_after_settlement_keeps_wal(self):
+        self.s.emergency_note(SCOPE,"OWNER_REVIEW_REQUIRED")
+        self._reject("ZERO_ENTRY_SCOPE_HAS_OTHER_WAL_OR_INCIDENT")
+
+    def test_reserve_client_id_mismatch_keeps_wal(self):
+        p=self.s.wal/("POLICY_RESERVE_"+SCOPE+".json")
+        row=json.loads(p.read_text())
+        row["detail"]["client_id"]="SOMEONE-ELSE"
+        p.write_text(json.dumps(row))
+        self._reject("ZERO_ENTRY_EXACT_RESERVATION_WAL_REQUIRED")
+
+    def test_close_event_nonzero_pnl_keeps_wal(self):
+        self.settled["event"]["realized_pnl_usdt"]="0.01"
+        self._reject("ZERO_ENTRY_LEDGER_CLOSED_NOT_RECONFIRMED")
+
+    def test_close_event_wrong_source_keeps_wal(self):
+        self.settled["event"]["source"]="OWNER_SIGNED_REVIEW"
+        self._reject("ZERO_ENTRY_SIGNED_CLOSED_EVENT_MISSING")
+
+    def test_ledger_pending_state_keeps_wal(self):
+        self.s.gate.open=True
+        self._reject("ZERO_ENTRY_LEDGER_CLOSED_NOT_RECONFIRMED")
+
+    def test_unsigned_or_missing_close_result_keeps_wal(self):
+        self.settled={}
+        self._reject("ZERO_ENTRY_SETTLEMENT_NOT_CERTIFIED")
+
+    def test_wal_changes_during_signed_query_keeps_wal(self):
+        original=self.s.ns["_restart_wal_records"]
+        n=[0]
+        def race():
+            n[0]+=1
+            rows=original()
+            if n[0]==2:
+                rows["ENTRY_RACE.json"]={
+                    "role":"ENTRY","detail":{"scope":SCOPE,"symbol":SYM,
+                                             "client_id":ENTRY_ID}}
+            return rows
+        self.s.ns["_restart_wal_records"]=race
+        self._reject("ZERO_ENTRY_WAL_CHANGED_DURING_CHECK")
+
+    def test_wal_corruption_keeps_wal(self):
+        (self.s.wal/"ENTRY_broken.json").write_text("broken-json")
+        self._reject("RESTART_WAL_UNREADABLE_KEEP_OPENED")
+
+    def test_successful_direct_resolve_is_fail_closed_for_second_attempt(self):
+        result=self.s.ns["_resolve_verified_zero_entry_scope"](
+            self.s.gate,self.s.venue,{"entry":ENTRY},SCOPE,self.settled)
+        self.assertEqual(result,"ZERO_ENTRY_SIGNED_FLAT_AND_LEDGER_CLOSED")
+        with self.assertRaisesRegex(Blocked,"ZERO_ENTRY_ALREADY_RESOLVED_OWNER_REVIEW"):
+            self.s.ns["_resolve_verified_zero_entry_scope"](
+                self.s.gate,self.s.venue,{"entry":ENTRY},SCOPE,self.settled)
+
+    def test_certain_presend_lease_refusal_may_be_resolved_with_full_proof(self):
+        s=self.s
+        s.gate.open=True
+        s.gate.closed_event=None
+        s.gate.close_count=0
+        s.now=116
+        with self.assertRaisesRegex(PreSendRefused,
+            "OWNER_APPROVAL_EXPIRED_UNDER_LEASE_NO_WRITE"):
+            s.ns["one_write"](s.venue,"ENTRY",ENTRY,SCOPE,owner_approved_at=100)
+        self.assertEqual(s.venue.post_calls,[])
+        self.assertFalse(any(p.name.startswith("ENTRY_") for p in s.wal.iterdir()))
+        result=s.ns["_settle_zero_entry_and_resolve"](
+            s.gate,s.inputs,s.venue,{"entry":ENTRY},SCOPE)
+        self.assertEqual(result,"ZERO_ENTRY_SIGNED_FLAT_AND_LEDGER_CLOSED")
+        self.assertTrue((s.wal/("resolved_"+SCOPE+".json")).is_file())
+
+    def test_uncertain_post_even_when_later_flat_must_not_auto_resolve(self):
+        s=self.s
+        s.gate.open=True
+        s.gate.closed_event=None
+        s.gate.close_count=0
+        s.venue.post_error=TimeoutError("SIMULATED_UNKNOWN_SEND")
+        with self.assertRaisesRegex(Blocked,"UNKNOWN_WRITE_RESULT_DO_NOT_RETRY_ENTRY"):
+            s.ns["one_write"](s.venue,"ENTRY",ENTRY,SCOPE,owner_approved_at=100)
+        self.assertEqual(len(s.venue.post_calls),1)
+        self.assertTrue(any(p.name.startswith("ENTRY_") for p in s.wal.iterdir()))
+        self.assertIsNone(s.gate.closed_event)
+        self._reject("ZERO_ENTRY_LEDGER_CLOSED_NOT_RECONFIRMED")
+        # Even if a fake later settles a flat position, the ENTRY WAL remains.
+        result=s.ns["policy_settle_after_flat"](
+            s.gate,s.inputs,s.venue,{"entry":{"symbol":SYM}},SCOPE,"0")
+        self.assertEqual(result["event"]["type"],"CLOSED")
+        self.settled=result
+        self._reject("ZERO_ENTRY_SCOPE_HAS_OTHER_WAL_OR_INCIDENT")
+
+    def test_exact_signed_absence_is_required_by_source(self):
+        fn=next(x for x in TREE.body if isinstance(x,ast.FunctionDef)
+                and x.name=="_resolve_verified_zero_entry_scope")
+        methods=[x for x in ast.walk(fn) if isinstance(x,ast.Call)
+                 and isinstance(x.func,ast.Attribute)
+                 and x.func.attr=="read"
+                 and x.args and isinstance(x.args[0],ast.Constant)]
+        self.assertEqual([x.args[0].value for x in methods],["query_order"])
+
 
 if __name__=="__main__":
     unittest.main()

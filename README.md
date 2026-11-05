@@ -56,6 +56,14 @@ Komut: `python3 -B -m unittest discover -s tests -q`.
 
 **Uyarı:** Bu testler tüm `run_once` üretim akışını veya gerçek Binance SDK bağlantısını çalıştırmaz. Canlı kullanıma hazır sürüm onayı değildir.
 
+## Altıncı geliştirme paketi — sıfır giriş rezervasyon WAL çözümü (offline)
+
+Beşinci paket, imzalı `CLOSED` defter kaydından sonra `POLICY_RESERVE_<scope>.json` satırının çözümlenmemiş kalabileceğini göstermişti. Altıncı pakette yalnızca **kesin pre-send ret** için `_settle_zero_entry_and_resolve()` adayı eklendi. Binance'in tam clientOrderId için kesin `OrderNotFound` (-2013) yanıtı, `SIGNED_INCOME_REALIZED_PNL` kaynaklı sıfır-PNL defter kapanışı, tam WAL kimliği, hiçbir ek emir günlüğü/incident bulunmaması, defterin yeniden okunması ve **yeniden alınmış imzalı FLAT + tüm açık emirlerin sıfır olması** birlikte kanıtlanırsa yalnızca çözüm işareti oluşturulur. Eski dosya silinmez.
+
+POST sonucu belirsizse, herhangi bir ENTRY günlüğü varsa, GET timeout verirse veya emir bulunursa otomatik WAL çözülmez. 29 yeni test (19 WAL/kanıt zinciri + 10 kesin Binance HTTP hata sınıflandırması) toplamı **101/101** yaptı. Açıklama ve dağıtım sınırlamaları: `ZERO_ENTRY_WAL_RESOLUTION_20261105.md`.
+
+Bu kod yalnızca geliştirme kopyasındadır; gerçek Binance SDK / imzalı GET dönüşümü ve tam yürütücü entegrasyonu henüz ayrıca doğrulanmalıdır.
+
 ## Güvenlik ve sınırlar
 
 Testler yalnızca seçilmiş yürütücü fonksiyonlarını AST üzerinden ve ayrı kopyalanan STOP/yeniden başlatma modüllerini sentetik borsa yanıtlarıyla çalıştırır. Owner uygulaması, ağ bağlantısı, şifre, imzalı GET veya gerçek POST/DELETE testi yapılmaz. Tüm entegre testler ve canlıya alma ayrı inceleme gerektirir.

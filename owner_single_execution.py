@@ -928,9 +928,10 @@ def _check_approval_after_reservation(approved_at, gate, inputs, venue, bundle, 
     try:
         _require_fresh_owner_approval(approved_at, "AFTER_RESERVATION")
     except Blocked:
-        # Reuse the existing fail-closed zero-fill settle path, never send ENTRY.
-        # If signed FLAT or income evidence is unavailable, ledger stays OPENED.
-        policy_settle_after_flat(gate, inputs, venue, bundle, scope, "0")
+        # Never send ENTRY. Close zero-fill with signed evidence; resolve WAL
+        # only after exact order absence, closed ledger and fresh FLAT checks.
+        # Missing evidence leaves ledger OPENED or WAL unresolved (still blocked).
+        _settle_zero_entry_and_resolve(gate, inputs, venue, bundle, scope)
         raise
 
 def _policy_inputs_market_last(inputs, venue, bundle, account):
@@ -1024,6 +1025,101 @@ def policy_settle_after_flat(gate,inputs,venue,bundle,scope,entry_filled_qty):
             return result
     emergency_note(scope,"POLICY_SETTLE_PENDING_OPENED_KEPT:"+last)
     return None
+
+def _resolve_verified_zero_entry_scope(gate,venue,bundle,scope,settled):
+    """Resolve a reserve-only WAL scope after signed zero-entry settlement.
+
+    This is an offline development candidate, invoked only on certain pre-send
+    refusals. The journal-before-POST invariant and exact signed order-not-found
+    are both required; any ambiguity remains fail-closed for owner review.
+    """
+    if type(settled) is not dict or settled.get("risk_exceeded") is not False:
+        raise Blocked("ZERO_ENTRY_SETTLEMENT_NOT_CERTIFIED")
+    entry=bundle.get("entry") if type(bundle) is dict else None
+    if type(entry) is not dict:
+        raise Blocked("ZERO_ENTRY_BUNDLE_INVALID")
+    symbol,cid=entry.get("symbol"),entry.get("newClientOrderId")
+    if (type(scope) is not str or not scope or
+            type(symbol) is not str or not symbol or
+            type(cid) is not str or not cid):
+        raise Blocked("ZERO_ENTRY_SCOPE_BINDING_MISSING")
+    close_event=settled.get("event")
+    if (type(close_event) is not dict
+            or close_event.get("type")!="CLOSED"
+            or close_event.get("scope")!=scope
+            or close_event.get("source")!="SIGNED_INCOME_REALIZED_PNL"
+            or type(close_event.get("realized_pnl_usdt")) is not str):
+        raise Blocked("ZERO_ENTRY_SIGNED_CLOSED_EVENT_MISSING")
+    try:
+        pnl=Decimal(close_event["realized_pnl_usdt"])
+        if not pnl.is_finite() or pnl!=0:
+            raise ValueError()
+        opened,closed=gate._scope_events(scope)
+        if (type(opened) is not dict or type(closed) is not dict
+                or closed!=close_event
+                or any(p.get("scope")==scope for p in gate.pending_scopes())):
+            raise ValueError()
+    except Exception:
+        raise Blocked("ZERO_ENTRY_LEDGER_CLOSED_NOT_RECONFIRMED") from None
+    records=_restart_wal_records()
+    name="POLICY_RESERVE_"+scope+".json"
+    row=records.get(name)
+    detail=row.get("detail") if type(row) is dict else None
+    if (type(detail) is not dict
+            or row.get("role")!="POLICY_RESERVE"
+            or row.get("intent")!=scope
+            or row.get("state")!="RESERVATION_PENDING"
+            or detail.get("scope")!=scope
+            or detail.get("symbol")!=symbol
+            or detail.get("client_id")!=cid):
+        raise Blocked("ZERO_ENTRY_EXACT_RESERVATION_WAL_REQUIRED")
+    # Do not resolve any scope with ENTRY/STOP/TP journal or an incident.
+    for key,record in records.items():
+        if key==name:
+            continue
+        if key=="resolved_"+scope+".json":
+            raise Blocked("ZERO_ENTRY_ALREADY_RESOLVED_OWNER_REVIEW")
+        if type(record) is not dict:
+            raise Blocked("ZERO_ENTRY_OTHER_WAL_UNREADABLE")
+        other=record.get("detail")
+        if ((type(other) is dict and other.get("scope")==scope)
+                or (key.startswith("incident_") and record.get("scope")==scope)):
+            raise Blocked("ZERO_ENTRY_SCOPE_HAS_OTHER_WAL_OR_INCIDENT")
+    # An unobserved ENTRY can never be inferred from FLAT alone.
+    # Require the SDK's exact signed GET HTTP-400/-2013 classification.
+    try:
+        venue.read("query_order",symbol=symbol,
+                   orig_client_order_id=cid,recv_window=5000)
+    except OrderNotFound:
+        pass
+    except Exception:
+        raise Blocked("ZERO_ENTRY_SIGNED_ORDER_ABSENCE_UNVERIFIED") from None
+    else:
+        raise Blocked("ZERO_ENTRY_ORDER_FOUND_UNEXPECTED")
+    # Recheck signed FLAT and zero orders AFTER the income lag and ledger close.
+    try:
+        account,normal,algo=snapshot(venue)
+        if (type(normal) is not list or type(algo) is not list
+                or normal or algo or exposure(account,symbol)!=0
+                or any(Decimal(str(p.get("positionAmt")))!=0
+                       for p in account["positions"])):
+            raise Blocked("ZERO_ENTRY_NOT_SIGNED_FLAT_OR_ORDERS_REMAIN")
+    except Exception:
+        raise Blocked("ZERO_ENTRY_FRESH_FLAT_READ_UNVERIFIED") from None
+    # Re-read WAL to avoid blessing a concurrently appended ENTRY journal.
+    if _restart_wal_records()!=records:
+        raise Blocked("ZERO_ENTRY_WAL_CHANGED_DURING_CHECK")
+    mark_scope_resolved(scope,"ZERO_ENTRY_SIGNED_FLAT_AND_LEDGER_CLOSED")
+    return "ZERO_ENTRY_SIGNED_FLAT_AND_LEDGER_CLOSED"
+
+
+def _settle_zero_entry_and_resolve(gate,inputs,venue,bundle,scope):
+    """Keep a pending WAL blocked unless all zero-entry proofs are available."""
+    settled=policy_settle_after_flat(gate,inputs,venue,bundle,scope,"0")
+    if type(settled) is not dict:
+        return None
+    return _resolve_verified_zero_entry_scope(gate,venue,bundle,scope,settled)
+
 
 def write_policy_reserve_record(scope,symbol,client_id):
     """POLICY-RESTART-002: durable link scope -> symbol + entry clientOrderId,
@@ -1405,8 +1501,9 @@ def run_once(bundle):
             entry_receipt=one_write(venue,"ENTRY",bundle["entry"],scope,
                                     owner_approved_at=approved_at)
         except PreSendRefused:
-            # nothing was sent: settle the reservation with zero fill
-            policy_settle_after_flat(gate,inputs,venue,bundle,scope,"0")
+            # Definitely no POST: settle with signed zero-fill evidence, then
+            # resolve the reserve-only WAL only if exact order-absence proves it.
+            _settle_zero_entry_and_resolve(gate,inputs,venue,bundle,scope)
             raise
         except Exception:
             emergency_note(scope,"ENTRY_WRITE_OR_RECEIPT_UNCERTAIN")

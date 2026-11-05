@@ -54,7 +54,7 @@ def namespace(clock, journal, settle):
         "journal":lambda *args: journal.append(args),
         "checked":lambda venue,role,wire:{"status":"SIGNED_FAKE_READBACK","role":role},
         "_live_token_ok":lambda token:True,
-        "policy_settle_after_flat":settle,
+        "_settle_zero_entry_and_resolve":settle,
     }
     exec(compile(SAFE_AST,str(SOURCE),"exec"),ns)
     return ns
@@ -92,7 +92,7 @@ class OwnerApprovalExpiryTests(unittest.TestCase):
         ns=namespace(clock,[],lambda *args:calls.append(args))
         with self.assertRaisesRegex(Blocked,"OWNER_APPROVAL_EXPIRED_AFTER_RESERVATION"):
             ns["_check_approval_after_reservation"](100,"gate","inputs","venue",ENTRY,SCOPE)
-        self.assertEqual(calls,[("gate","inputs","venue",ENTRY,SCOPE,"0")])
+        self.assertEqual(calls,[("gate","inputs","venue",ENTRY,SCOPE)])
 
     def test_reservation_settlement_failure_stays_fail_closed(self):
         clock={"now":118}
