@@ -7,7 +7,7 @@ Symbol rules are NEVER hardcoded; they come from the exchangeInfo document
 passed in (fixtures in tests). Owner-approved ceilings are hardcoded and can
 only be tightened by the caller:
 
-    leverage 1x · max notional 100 USDT · max per-trade risk 0.30 USDT
+    leverage 3x · filter ceiling 285 USDT notional · filter risk ceiling 2.70 USDT
 
 validate_bundle() checks, and raises FilterBlocked on any doubt:
   * exchangeInfo freshness, single TRADING USDT perpetual entry, one-way mode,
@@ -22,8 +22,8 @@ validate_bundle() checks, and raises FilterBlocked on any doubt:
     LOT_SIZE step/min, quantities sum EXACTLY to entry qty, beyond entry;
   * MIN_NOTIONAL for entry (and TPs unless the caller explicitly exempts
     reduce-only orders after verifying Binance's current rule);
-  * notional <= 100 USDT at the WORST-CASE entry fill (mark + slippage);
-  * risk <= 0.30 USDT = qty x |worst entry - stop| + stop slippage + taker
+  * notional <= configurable ceiling (at most 285 USDT) at worst-case entry;
+  * risk <= configurable ceiling (at most 2.70 USDT) = qty x |worst entry - stop| + stop slippage + taker
     fees on entry and stop. Rounding can only make risk SMALLER (helpers
     round toward safety); the check is done on the final rounded values.
 """
@@ -71,8 +71,13 @@ def symbol_rules(exchange_info, symbol, *, received_at_ms, now_ms, max_age_ms=30
     server = exchange_info.get("serverTime")
     if type(server) is not int or type(received_at_ms) is not int or type(now_ms) is not int:
         raise FilterBlocked("EXCHANGE_INFO_TIME_MISSING")
-    if not 0 <= now_ms - received_at_ms <= max_age_ms:  # exchangeInfo serverTime Binance onbelleginden eski gelir
-        raise FilterBlocked("EXCHANGE_INFO_STALE_OR_CLOCK_MISMATCH")
+    # Validate freshness from local receipt time, not exchangeInfo.serverTime:
+    # Binance may return a cached serverTime. Remain fail-closed at 5 minutes.
+    age_ms = now_ms - received_at_ms
+    if age_ms < 0:
+        raise FilterBlocked("EXCHANGE_INFO_RECEIPT_IN_FUTURE_CLOCK_MISMATCH")
+    if age_ms > max_age_ms:
+        raise FilterBlocked("EXCHANGE_INFO_TOO_OLD")
     rows = [r for r in exchange_info["symbols"] if type(r) is dict and r.get("symbol") == symbol]
     if len(rows) != 1:
         raise FilterBlocked("SYMBOL_RULES_MISSING_OR_DUPLICATE")
@@ -261,7 +266,7 @@ def validate_bundle(bundle, rules, *, mark, last_price, mark_time_ms, now_ms,
     fees = qty * worst_entry * fee + qty * stop_fill * fee
     risk = price_risk + fees
     if risk > max_risk:
-        raise FilterBlocked("RISK_ABOVE_030_USDT_INCLUDING_SLIPPAGE_AND_FEES")
+        raise FilterBlocked(f"RISK_ABOVE_OWNER_LIMIT_{max_risk}_USDT_INCLUDING_SLIPPAGE_AND_FEES")
     return {"symbol": sym, "qty": str(qty), "notional_worst_usdt": str(notional),
             "margin_1x_usdt": str(margin), "risk_worst_usdt": str(risk),
             "risk_price_usdt": str(price_risk), "fees_usdt": str(fees),

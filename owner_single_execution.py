@@ -79,7 +79,7 @@ SDK_PINS=(("binance-sdk-derivatives-trading-usds-futures","17.6.0","SDK_VERSION_
 POST_PATHS=frozenset(("/fapi/v1/order","/fapi/v1/algoOrder"))
 DELETE_PATHS=POST_PATHS
 MAX_MARGIN=Decimal("200")     # sahip 29.10: atlas_limits.json      # 047 live pilot (owner 23.10.2026): 3x isolated, margin <= 95 USDT
-MAX_RISK=Decimal("0.75")      # 047: worst-case loss incl. slippage and fees <= 2.70 USDT
+MAX_RISK=Decimal("0.75")      # Active owner executor cap; filter ceiling is distinct.
 MAX_NOTIONAL=Decimal("600")   # 047: = MAX_MARGIN x MAX_LEVERAGE
 MAX_LEVERAGE=Decimal("3")     # 047
 ENTRY_RESOLVE_POLLS=15
@@ -462,7 +462,7 @@ def exposure(account,symbol):
     return amount
 
 def risk_authority(venue,bundle,account):
-    """Fresh pinned exchange mark + filters and signed isolated 1x balance."""
+    """Fresh pinned exchange mark, filters and signed isolated pilot leverage."""
     symbol=bundle["entry"]["symbol"]
     quantity=dec(bundle["entry"]["quantity"])
     stop=dec(bundle["stop"]["triggerPrice"])
@@ -514,7 +514,7 @@ def risk_authority(venue,bundle,account):
         raise Blocked("NOTIONAL_OUT_OF_PILOT_BOUNDS")
     risk=worst_risk(side,quantity,mark,stop,ENTRY_SLIPPAGE)
     if risk>MAX_RISK:
-        raise Blocked("STOP_RISK_EXCEEDS_FIXED_030_USDT_LIMIT_INCL_COSTS")
+        raise Blocked(f"STOP_RISK_EXCEEDS_OWNER_LIMIT_{MAX_RISK}_USDT_INCL_COSTS")
     positions=[p for p in account["positions"] if p.get("symbol")==symbol]
     # 055 (28.10): v3 omits flat symbols (0 rows is normal); leverage and margin type are
     # verified from signed symbolConfig below.
@@ -527,7 +527,7 @@ def risk_authority(venue,bundle,account):
           if type(config) is list else [])
     if (len(rows)!=1 or type(rows[0].get("leverage")) is not int
         or Decimal(rows[0]["leverage"])!=MAX_LEVERAGE):
-        raise Blocked("SIGNED_SYMBOL_LEVERAGE_NOT_1X")
+        raise Blocked(f"SIGNED_SYMBOL_LEVERAGE_NOT_OWNER_{MAX_LEVERAGE}X")
     if rows[0].get("marginType")!="ISOLATED":
         raise Blocked("SIGNED_SYMBOL_NOT_ISOLATED_MARGIN")
     margin=notional/MAX_LEVERAGE
@@ -552,7 +552,7 @@ def worst_risk(side,quantity,entry,stop,entry_slippage):
             +quantity*worst_entry*TAKER_FEE+quantity*stop_fill*TAKER_FEE)
 
 def fill_breaches_policy(side,quantity,fill,stop):
-    """F2 post-fill: True if the signed fill breaks 0.30 (costs incl.) or 100."""
+    """F2 post-fill: True if signed risk or notional exceeds the pinned owner pilot limits."""
     try:
         risk=worst_risk(side,quantity,fill,stop,Decimal("0"))
     except Blocked:
@@ -1354,8 +1354,8 @@ def run_once(bundle):
                 policy_settle_after_flat(gate,inputs,venue,bundle,scope,"0")
                 raise Blocked("ENTRY_NOT_EXECUTED_VERIFIED_NO_RETRY")
         # Market fill price can differ from the preflight mark. Abort and
-        # flatten if the signed fill breaks the 0.30 USDT (costs incl.) risk
-        # or the 100 USDT notional policy (F2).
+        # Post-fill safety check uses the current owner risk and notional caps
+        # without changing those limits or relaxing the fail-closed behavior.
         actual_fill=dec(entry_receipt["avgPrice"])
         if ((stop>=actual_fill) if side=="BUY" else (stop<=actual_fill)):
             emergency_note(scope,"ACTUAL_FILL_STOP_DIRECTION_INVALID")
