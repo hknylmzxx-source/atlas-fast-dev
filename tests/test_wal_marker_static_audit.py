@@ -23,8 +23,10 @@ class WalMarkerAuditTests(unittest.TestCase):
     def test_no_false_claim_shared_fence_is_wired(self):
         self.assertIs(self.report["owner_imports_shared_wal_fence"],False)
         self.assertIs(self.report["marker_has_explicit_fence_context"],False)
-    def test_no_false_claim_alarm_startup_is_wired(self):
-        self.assertIs(self.report["startup_scans_emergency_latch"],False)
+    def test_dev_startup_explicitly_blocks_emergency_latch(self):
+        self.assertIs(self.report["startup_scans_emergency_latch"],True)
+        # Only direct source-level blocking is wired. The two-read prototype
+        # and live atomic-entry protection are still NOT installed.
         self.assertIs(self.report["owner_imports_restart_alarm_candidate"],False)
     def test_release_classification_is_no_go(self):
         self.assertFalse(self.report["live_release_allowed"])

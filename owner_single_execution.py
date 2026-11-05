@@ -216,6 +216,11 @@ def startup_reconcile():
     open_scopes=set();resolved=set()
     for f in LOG.iterdir():
         n=f.name
+        # An independent emergency latch is never cleared by a resolved WAL
+        # marker, even when its JSON is corrupt or its name is symlinked.
+        # This check deliberately runs before parsing the WAL row.
+        if n.startswith("emergency_latch_"):
+            raise Blocked("UNRESOLVED_EMERGENCY_LATCH_OWNER_REVIEW_REQUIRED")
         if n.startswith("incident_"):
             raise Blocked("UNRESOLVED_INCIDENT_OWNER_REVIEW_REQUIRED")
         if n.startswith("resolved_") and n.endswith(".json"):
