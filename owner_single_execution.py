@@ -1106,11 +1106,13 @@ def _resolve_verified_zero_entry_scope(gate,venue,bundle,scope,settled):
             raise Blocked("ZERO_ENTRY_NOT_SIGNED_FLAT_OR_ORDERS_REMAIN")
     except Exception:
         raise Blocked("ZERO_ENTRY_FRESH_FLAT_READ_UNVERIFIED") from None
-    # Re-read WAL to avoid blessing a concurrently appended ENTRY journal.
+    # Re-read WAL to catch ordinary concurrent writes. A remaining TOCTOU gap
+    # exists between this read and the resolution marker: all WAL writers
+    # (including incident and emergency writers) do not share an audited
+    # exclusive fence. Until they do, resolving automatically is UNSAFE.
     if _restart_wal_records()!=records:
         raise Blocked("ZERO_ENTRY_WAL_CHANGED_DURING_CHECK")
-    mark_scope_resolved(scope,"ZERO_ENTRY_SIGNED_FLAT_AND_LEDGER_CLOSED")
-    return "ZERO_ENTRY_SIGNED_FLAT_AND_LEDGER_CLOSED"
+    raise Blocked("ZERO_ENTRY_AUTO_RESOLUTION_DISABLED_WAL_FENCE_UNPROVEN")
 
 
 def _settle_zero_entry_and_resolve(gate,inputs,venue,bundle,scope):

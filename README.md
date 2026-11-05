@@ -86,7 +86,7 @@ Bu bir **kontrol akışı simülasyonudur**, gerçek giriş emri veya güvenlik 
 
 `_restart_entry_fill` artık ENTRY WAL dosyasının yokluğunu emir yokluğu olarak kabul etmez: tam clientOrderId için imzalı kesin `OrderNotFound` kanıtı gerekir. Reserve-only sıfır-fill restart çözümü de ek `_resolve_verified_zero_entry_scope` kanıt kapısından geçer. **9 yeni pozitif/negatif test** eklendi.
 
-**Açık güvenlik engeli:** WAL son okumasından hemen sonra, `resolved` işareti yazılmadan önce yeni ENTRY kaydı eklenebildiği için bir TOCTOU yarışı yeniden üretildi. Bu test `@unittest.expectedFailure` olarak kaydedildi. Toplam **142 test: 141 başarılı, 1 bilinen/çözülmemiş güvenlik başarısızlığı**. Bu nedenle **NO-GO FOR LIVE**, otomatik WAL çözümü üretime dağıtılmamalı.
+**İnceleme bulgusu:** Son WAL okuması ile `resolved` işareti arasında TOCTOU yarışı bulundu. Dokuzuncu paketin ilk testinde bu açık `@unittest.expectedFailure` ile gösterildi. Sonraki güvenli muhafaza değişikliği, ortak kilit tüm yazıcılar için kanıtlanana dek **otomatik sıfır-ENTRY WAL çözümünü devre dışı bırakır** (`ZERO_ENTRY_AUTO_RESOLUTION_DISABLED_WAL_FENCE_UNPROVEN`). Bu aşamada 142/142 test normal geçti; test artık yalnızca **çözüm işaretinin yazılmadığını** kanıtlar, yarışın atomik olarak düzeltildiğini değil. Tam ortak kilit tasarımı hâlâ açık; **NO-GO FOR LIVE**.
 
 Teknik rapor: `WAL_RACE_REVIEW_20261105.md`. RC1 etiketi değiştirilmedi.
 

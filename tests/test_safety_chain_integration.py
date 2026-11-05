@@ -273,25 +273,21 @@ class EndToEndSafetyChainTests(unittest.TestCase):
     def tearDown(self):
         self.s.close()
 
-    def test_expired_approval_after_reservation_settles_and_exactly_resolves(self):
+    def test_expired_approval_after_reservation_settles_but_wal_stays_locked(self):
         s=self.s
         bundle=s.reserve()
         s.now=116.0
-        with self.assertRaisesRegex(Blocked,"OWNER_APPROVAL_EXPIRED_AFTER_RESERVATION"):
+        with self.assertRaisesRegex(Blocked,"ZERO_ENTRY_AUTO_RESOLUTION_DISABLED_WAL_FENCE_UNPROVEN"):
             s.ns["_check_approval_after_reservation"](
                 100.0,s.gate,s.inputs,s.venue,bundle,SCOPE)
         self.assertEqual(s.gate.close_count,1)
         self.assertFalse(s.gate.open)
         self.assertEqual(s.venue.post_calls,[])
         report,_=s.gate_report()
-        # Only all four independent proofs permit the reserve-only WAL marker:
-        # zero-fill signed income, closed ledger, exact order-not-found, fresh flat.
-        self.assertTrue(report["entries_allowed"])
-        self.assertEqual(report["startup_gate"],"PASS")
+        self.assertFalse(report["entries_allowed"])
+        self.assertTrue(report["startup_gate"].startswith("BLOCKED:"))
         marker=s.wal/("resolved_"+SCOPE+".json")
-        self.assertTrue(marker.is_file())
-        self.assertEqual(json.loads(marker.read_text())["outcome"],
-                         "ZERO_ENTRY_SIGNED_FLAT_AND_LEDGER_CLOSED")
+        self.assertFalse(marker.exists())
 
     def test_expired_approval_with_income_outage_leaves_ledger_and_incident(self):
         s=self.s
@@ -466,15 +462,10 @@ class ZeroEntryResolutionProofTests(unittest.TestCase):
         (self.s.wal/"ENTRY_broken.json").write_text("broken-json")
         self._reject("RESTART_WAL_UNREADABLE_KEEP_OPENED")
 
-    def test_successful_direct_resolve_is_fail_closed_for_second_attempt(self):
-        result=self.s.ns["_resolve_verified_zero_entry_scope"](
-            self.s.gate,self.s.venue,{"entry":ENTRY},SCOPE,self.settled)
-        self.assertEqual(result,"ZERO_ENTRY_SIGNED_FLAT_AND_LEDGER_CLOSED")
-        with self.assertRaisesRegex(Blocked,"ZERO_ENTRY_ALREADY_RESOLVED_OWNER_REVIEW"):
-            self.s.ns["_resolve_verified_zero_entry_scope"](
-                self.s.gate,self.s.venue,{"entry":ENTRY},SCOPE,self.settled)
+    def test_all_evidence_still_keeps_wal_locked_until_writer_fence_exists(self):
+        self._reject("ZERO_ENTRY_AUTO_RESOLUTION_DISABLED_WAL_FENCE_UNPROVEN")
 
-    def test_certain_presend_lease_refusal_may_be_resolved_with_full_proof(self):
+    def test_certain_presend_lease_refusal_keeps_wal_until_fence(self):
         s=self.s
         s.gate.open=True
         s.gate.closed_event=None
@@ -485,10 +476,10 @@ class ZeroEntryResolutionProofTests(unittest.TestCase):
             s.ns["one_write"](s.venue,"ENTRY",ENTRY,SCOPE,owner_approved_at=100)
         self.assertEqual(s.venue.post_calls,[])
         self.assertFalse(any(p.name.startswith("ENTRY_") for p in s.wal.iterdir()))
-        result=s.ns["_settle_zero_entry_and_resolve"](
-            s.gate,s.inputs,s.venue,{"entry":ENTRY},SCOPE)
-        self.assertEqual(result,"ZERO_ENTRY_SIGNED_FLAT_AND_LEDGER_CLOSED")
-        self.assertTrue((s.wal/("resolved_"+SCOPE+".json")).is_file())
+        with self.assertRaisesRegex(Blocked,"ZERO_ENTRY_AUTO_RESOLUTION_DISABLED_WAL_FENCE_UNPROVEN"):
+            s.ns["_settle_zero_entry_and_resolve"](
+                s.gate,s.inputs,s.venue,{"entry":ENTRY},SCOPE)
+        self.assertFalse((s.wal/("resolved_"+SCOPE+".json")).exists())
 
     def test_uncertain_post_even_when_later_flat_must_not_auto_resolve(self):
         s=self.s
@@ -509,13 +500,8 @@ class ZeroEntryResolutionProofTests(unittest.TestCase):
         self.settled=result
         self._reject("ZERO_ENTRY_SCOPE_HAS_OTHER_WAL_OR_INCIDENT")
 
-    @unittest.expectedFailure
-    def test_known_race_between_final_wal_scan_and_resolution_marker(self):
-        """Known NO-GO gap: another writer could append ENTRY before marker.
-
-        This expected failure is retained as a visible security blocker, not
-        counted as passing evidence. Close only with a proven shared fence.
-        """
+    def test_known_race_cannot_reach_resolution_marker_while_disabled(self):
+        """TOCTOU remains unfixed; fail-closed containment prevents marker."""
         s=self.s
         original=s.ns["mark_scope_resolved"]
         def concurrent_append_before_marker(scope,outcome):
@@ -523,10 +509,11 @@ class ZeroEntryResolutionProofTests(unittest.TestCase):
                 "scope":scope,"symbol":SYM,"client_id":ENTRY_ID})
             return original(scope,outcome)
         s.ns["mark_scope_resolved"]=concurrent_append_before_marker
-        s.ns["_resolve_verified_zero_entry_scope"](
-            s.gate,s.venue,{"entry":ENTRY},SCOPE,self.settled)
-        self.assertFalse((s.wal/("resolved_"+SCOPE+".json")).exists(),
-                         "Unsafe release: a new ENTRY WAL appeared before marker")
+        with self.assertRaisesRegex(Blocked,"ZERO_ENTRY_AUTO_RESOLUTION_DISABLED_WAL_FENCE_UNPROVEN"):
+            s.ns["_resolve_verified_zero_entry_scope"](
+                s.gate,s.venue,{"entry":ENTRY},SCOPE,self.settled)
+        self.assertFalse((s.wal/("resolved_"+SCOPE+".json")).exists())
+        self.assertFalse(any(p.name.startswith("ENTRY_") for p in s.wal.iterdir()))
 
     def test_exact_signed_absence_is_required_by_source(self):
         fn=next(x for x in TREE.body if isinstance(x,ast.FunctionDef)
