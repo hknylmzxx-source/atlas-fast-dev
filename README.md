@@ -48,6 +48,14 @@ Bu paket, Owner SDK'nin `restart_coverage.py` ve `stop_ambiguity_guard.py` dosya
 
 Komut: `python3 -B -m unittest discover -s tests -q`.
 
+## Beşinci geliştirme paketi — entegre güvenlik zinciri (offline)
+
+`tests/test_safety_chain_integration.py` birden fazla gerçek Owner kaynak işlevini AST üzerinden **geçici WAL klasörü, sahte risk defteri ve sahte borsa yanıtlarıyla** beraber sınar. Testler süre aşmış onay, gelir okuma kesintisi, belirsiz ENTRY, eksik STOP, FLAT sonrası açık EXIT ve yeniden başlatmanın ancak kapatılmış scope ile serbest kalması durumlarını kapsar.
+
+Önemli operasyonel bulgu: `policy_settle_after_flat(..., "0")` risk defterini başarıyla kapatabilse bile `resolved_<scope>.json` yazmaz; bu nedenle `startup_reconcile` rezervasyonu açık WAL olarak tutup yeni işlemleri engelleyebilir. Güvenli olduğu için bu pakette otomatik çözüm işareti veya dosya temizleme eklenmedi. Kanıt şartları ve ayrıntılı senaryolar: `INTEGRATION_VALIDATION_20261105.md`.
+
+**Uyarı:** Bu testler tüm `run_once` üretim akışını veya gerçek Binance SDK bağlantısını çalıştırmaz. Canlı kullanıma hazır sürüm onayı değildir.
+
 ## Güvenlik ve sınırlar
 
 Testler yalnızca seçilmiş yürütücü fonksiyonlarını AST üzerinden ve ayrı kopyalanan STOP/yeniden başlatma modüllerini sentetik borsa yanıtlarıyla çalıştırır. Owner uygulaması, ağ bağlantısı, şifre, imzalı GET veya gerçek POST/DELETE testi yapılmaz. Tüm entegre testler ve canlıya alma ayrı inceleme gerektirir.
