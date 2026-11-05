@@ -90,6 +90,12 @@ Bu bir **kontrol akışı simülasyonudur**, gerçek giriş emri veya güvenlik 
 
 Teknik rapor: `WAL_RACE_REVIEW_20261105.md`. RC1 etiketi değiştirilmedi.
 
+## Onuncu geliştirme paketi — ortak WAL kilidi izole prototip
+
+`wal_writer_fence_candidate.py`, **yalnızca geliştirme alanında** gerçek Mac/POSIX `flock` kilidiyle WAL yazıcısı ile resolverın yarışını test eder. `tests/test_wal_writer_fence_candidate.py` içinde iki bağımsız süreç yarışması dahil 14 yeni test vardır; toplam **156/156 offline test başarılı**.
+
+Bu modül **henüz Owner yürütücüsündeki bütün WAL yazıcılarına bağlanmadı**. Prototipin `proof=True` girişi yalnızca test amaçlıdır, Binance veya risk defteri kanıtı değildir. Önceki fail-closed koruma korunuyor: otomatik sıfır-ENTRY WAL çözümü kapalı; **NO-GO FOR LIVE**. Ayrıntılar: `WAL_WRITER_FENCE_PROTOTYPE_20261105.md`.
+
 ## Güvenlik ve sınırlar
 
 Testler yalnızca seçilmiş yürütücü fonksiyonlarını AST üzerinden ve ayrı kopyalanan STOP/yeniden başlatma modüllerini sentetik borsa yanıtlarıyla çalıştırır. Owner uygulaması, ağ bağlantısı, şifre, imzalı GET veya gerçek POST/DELETE testi yapılmaz. Tüm entegre testler ve canlıya alma ayrı inceleme gerektirir.
