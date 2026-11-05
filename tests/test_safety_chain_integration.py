@@ -338,7 +338,7 @@ class EndToEndSafetyChainTests(unittest.TestCase):
         self.assertFalse(report["entries_allowed"])
         self.assertTrue(report["startup_gate"].startswith("BLOCKED:"))
 
-    def test_only_flat_settled_and_explicitly_resolved_scope_releases_restart(self):
+    def test_flat_settled_without_shared_fence_keeps_restart_locked(self):
         s=self.s
         s.reserve()
         s.ns["one_write"](s.venue,"ENTRY",ENTRY,SCOPE,owner_approved_at=100)
@@ -353,14 +353,16 @@ class EndToEndSafetyChainTests(unittest.TestCase):
             s.gate,s.inputs,s.venue,{"entry":{"symbol":SYM}},SCOPE,"79")
         self.assertEqual(settle["state"],"CLOSED")
         self.assertFalse(s.gate.open)
-        # Production's resolution marker requires its OWN review flow;
-        # this isolated test calls only the exact source marker writer.
-        s.ns["mark_scope_resolved"](SCOPE,"OFFLINE_TEST_SIGNED_FLAT")
+        # Even fully settled and FLAT cannot authorize an unfenced marker.
+        with self.assertRaisesRegex(
+                Blocked,"WAL_RESOLUTION_MARKER_DISABLED_SHARED_FENCE_UNPROVEN"):
+            s.ns["mark_scope_resolved"](SCOPE,"OFFLINE_TEST_SIGNED_FLAT")
+        self.assertFalse((s.wal/("resolved_"+SCOPE+".json")).exists())
         report,_=s.gate_report()
-        self.assertEqual(report["protection"],{})
-        self.assertEqual(report["startup_gate"],"PASS")
+        self.assertEqual(report["protection"],{SCOPE:"FLAT"})
+        self.assertTrue(report["startup_gate"].startswith("BLOCKED:"))
         self.assertEqual(report["policy"],"RECONCILED")
-        self.assertTrue(report["entries_allowed"])
+        self.assertFalse(report["entries_allowed"])
         self.assertEqual(len(s.venue.post_calls),2)  # simulated ENTRY and STOP
 
 class ZeroEntryResolutionProofTests(unittest.TestCase):

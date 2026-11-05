@@ -230,16 +230,13 @@ def startup_reconcile():
         raise Blocked("UNRESOLVED_WAL_SCOPE_OWNER_REVIEW_REQUIRED")
 
 def mark_scope_resolved(scope,outcome):
-    """Durable marker written ONLY after signed FLAT + owned exits cleared."""
-    path=LOG/("resolved_"+scope+".json")
-    raw=(json.dumps({"scope":scope,"outcome":outcome,"at":time.time()},
-                    sort_keys=True)+"\n").encode()
-    fd=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
-    with os.fdopen(fd,"wb") as out:
-        out.write(raw);out.flush();os.fsync(out.fileno())
-    dirfd=os.open(LOG,os.O_RDONLY)
-    try:os.fsync(dirfd)
-    finally:os.close(dirfd)
+    """Fail closed on ALL marker paths until every WAL writer shares a fence.
+
+    A signed FLAT snapshot or settled policy ledger alone cannot eliminate
+    concurrent ENTRY/STOP/TP/incident WAL writes. Keep unresolved scopes
+    blocked rather than create an unsafe marker. Offline development only.
+    """
+    raise Blocked("WAL_RESOLUTION_MARKER_DISABLED_SHARED_FENCE_UNPROVEN")
 
 def verify_sdk_versions(version):
     """007: exact pins for the USD-M SDK and its binance-common dependency."""

@@ -30,6 +30,32 @@ class WalMarkerAuditTests(unittest.TestCase):
         self.assertFalse(self.report["live_release_allowed"])
         self.assertEqual(self.report["assessment"],
                          "NO_GO_REVIEW_UNPROVEN_WRITER_ATOMICITY")
+    def test_all_three_callers_reach_the_same_fail_closed_marker(self):
+        tree=ast.parse(SOURCE.read_text())
+        funcs={n.name:n for n in tree.body if isinstance(n,ast.FunctionDef)}
+        marker=funcs["mark_scope_resolved"]
+        self.assertFalse(any(isinstance(n,ast.Call)
+                             and isinstance(n.func,ast.Attribute)
+                             and n.func.attr in ("open","write","fsync")
+                             for n in ast.walk(marker)))
+        self.assertTrue(any(isinstance(n,ast.Constant)
+                            and n.value=="WAL_RESOLUTION_MARKER_DISABLED_SHARED_FENCE_UNPROVEN"
+                            for n in ast.walk(marker)))
+        self.assertEqual(set(self.report["marker_callers"]),{
+            "risk_ledger_entry_gate","_restart_one","run_once"})
+
+    def test_marker_fail_closed_in_isolated_ast_without_filesystem(self):
+        tree=ast.parse(SOURCE.read_text())
+        marker=next(n for n in tree.body if isinstance(n,ast.FunctionDef)
+                    and n.name=="mark_scope_resolved")
+        scope={}
+        class Blocked(Exception):
+            pass
+        exec(compile(ast.Module(body=[marker],type_ignores=[]),
+                     "<offline-marker-source>","exec"),{"Blocked":Blocked},scope)
+        with self.assertRaisesRegex(Blocked,"SHARED_FENCE_UNPROVEN"):
+            scope["mark_scope_resolved"]("TEST_SCOPE","TEST_SETTLED")
+
     def test_read_only_audit_supports_synthetic_source(self):
         sample=("def mark_scope_resolved():\n    pass\n"
                 "def startup_reconcile():\n    pass\n"
