@@ -904,6 +904,40 @@ INPUT_FUNCTIONS=("policy_gate","policy_market","signed_income_envelope","stop_gu
 def _now_ms():
     return int(time.time()*1000)
 
+def _policy_inputs_market_last(inputs, venue, bundle, account):
+    """Collect income first and then the fresh market snapshot.
+
+    Preserve independent signed-income checks, the market timestamp and the
+    downstream PolicyGate. No automatic retry or stale-cache substitution.
+    Timings contain milliseconds only; no identifiers or API material.
+    """
+    begin = _now_ms()
+    envelope = inputs.signed_income_envelope(venue)
+    after_income = _now_ms()
+    market = inputs.policy_market(venue, bundle, account)
+    after_market = _now_ms()
+    if (after_income < begin or after_market < after_income):
+        raise Blocked("POLICY_SNAPSHOT_LOCAL_CLOCK_MOVED_BACKWARD")
+    if (type(market) is not dict
+            or type(market.get("exchange_info_received_ms")) is not int
+            or type(market.get("mark_time_ms")) is not int):
+        raise Blocked("POLICY_SNAPSHOT_MARKET_TIMES_MISSING")
+    timing = {
+        "income_ms": after_income - begin,
+        "market_ms": after_market - after_income,
+        "exchange_info_age_ms": after_market - market["exchange_info_received_ms"],
+        "mark_age_ms": after_market - market["mark_time_ms"],
+    }
+    return market, envelope, timing
+
+def _policy_timing_suffix(stage, timing):
+    """Attach timing only after a failed gate; avoid raw account/market data."""
+    return (";" + stage + "_TIMING_MS:"
+            + "INCOME=" + str(timing["income_ms"])
+            + ",MARKET=" + str(timing["market_ms"])
+            + ",INFO_AGE=" + str(timing["exchange_info_age_ms"])
+            + ",MARK_AGE=" + str(timing["mark_age_ms"]))
+
 def integration_inputs():
     """Owner-private adapters: PolicyGate (filters + signed income + ledger),
     market snapshot, signed income envelope, STOP guard journal/alarm/venue.
@@ -1295,8 +1329,11 @@ def run_once(bundle):
         # nothing) BEFORE the owner is asked.
         gate=inputs.policy_gate()
         phase=_contract(PolicyPhase,gate)
-        _contract(phase.preflight,bundle,inputs.policy_market(venue,bundle,account),
-                  inputs.signed_income_envelope(venue),local_now_ms=_now_ms())
+        market, envelope, timing = _policy_inputs_market_last(inputs,venue,bundle,account)
+        try:
+            _contract(phase.preflight,bundle,market,envelope,local_now_ms=_now_ms())
+        except Blocked as error:
+            raise Blocked(str(error)+_policy_timing_suffix("PREFLIGHT",timing)) from None
         # 046: the owner's signed iPhone APPROVE for exactly this bundle, consumed once in UID501 and
         # re-verified here (P-256, nonce, fingerprint, freshness); a JSON boolean or RPC reply never is.
         grant=owner_phone_grant(bundle)
@@ -1327,8 +1364,11 @@ def run_once(bundle):
         if time.monotonic()-approved_at>15:
             raise Blocked("OWNER_APPROVAL_TIMED_OUT_BEFORE_ENTRY")
         # F3: real reservation right before ENTRY, computed risk only.
-        risk_ledger_entry_gate(phase,bundle,inputs.policy_market(venue,bundle,account),
-                               inputs.signed_income_envelope(venue),scope,gate=gate)
+        market, envelope, timing = _policy_inputs_market_last(inputs,venue,bundle,account)
+        try:
+            risk_ledger_entry_gate(phase,bundle,market,envelope,scope,gate=gate)
+        except Blocked as error:
+            raise Blocked(str(error)+_policy_timing_suffix("RESERVE",timing)) from None
         try:
             entry_receipt=one_write(venue,"ENTRY",bundle["entry"],scope)
         except PreSendRefused:

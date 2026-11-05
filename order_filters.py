@@ -75,9 +75,9 @@ def symbol_rules(exchange_info, symbol, *, received_at_ms, now_ms, max_age_ms=30
     # Binance may return a cached serverTime. Remain fail-closed at 5 minutes.
     age_ms = now_ms - received_at_ms
     if age_ms < 0:
-        raise FilterBlocked("EXCHANGE_INFO_RECEIPT_IN_FUTURE_CLOCK_MISMATCH")
+        raise FilterBlocked(f"EXCHANGE_INFO_RECEIPT_IN_FUTURE_CLOCK_MISMATCH:OFFSET_MS={-age_ms}")
     if age_ms > max_age_ms:
-        raise FilterBlocked("EXCHANGE_INFO_TOO_OLD")
+        raise FilterBlocked(f"EXCHANGE_INFO_TOO_OLD:AGE_MS={age_ms}:LIMIT_MS={max_age_ms}")
     rows = [r for r in exchange_info["symbols"] if type(r) is dict and r.get("symbol") == symbol]
     if len(rows) != 1:
         raise FilterBlocked("SYMBOL_RULES_MISSING_OR_DUPLICATE")

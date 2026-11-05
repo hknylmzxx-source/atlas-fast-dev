@@ -128,13 +128,13 @@ class ExchangeInfoTimeTests(unittest.TestCase):
                          now_ms=1_300_000)["min_notional"], Decimal("5"))
 
     def test_over_five_minutes_is_rejected(self):
-        with self.assertRaisesRegex(filters.FilterBlocked, "^EXCHANGE_INFO_TOO_OLD$"):
+        with self.assertRaisesRegex(filters.FilterBlocked, "^EXCHANGE_INFO_TOO_OLD:AGE_MS=300001:LIMIT_MS=300000$"):
             filters.symbol_rules(exchange_info(), "AINUSDT",
                                  received_at_ms=1_000_000,
                                  now_ms=1_300_001)
 
     def test_receipt_in_future_is_rejected(self):
-        with self.assertRaisesRegex(filters.FilterBlocked, "^EXCHANGE_INFO_RECEIPT_IN_FUTURE_CLOCK_MISMATCH$"):
+        with self.assertRaisesRegex(filters.FilterBlocked, "^EXCHANGE_INFO_RECEIPT_IN_FUTURE_CLOCK_MISMATCH:OFFSET_MS=1$"):
             filters.symbol_rules(exchange_info(), "AINUSDT",
                                  received_at_ms=1_000_001,
                                  now_ms=1_000_000)
