@@ -64,6 +64,14 @@ POST sonucu belirsizse, herhangi bir ENTRY günlüğü varsa, GET timeout verirs
 
 Bu kod yalnızca geliştirme kopyasındadır; gerçek Binance SDK / imzalı GET dönüşümü ve tam yürütücü entegrasyonu henüz ayrıca doğrulanmalıdır.
 
+## Yedinci geliştirme paketi — yüklü Binance SDK sözleşme testleri
+
+`tests/test_sdk_transport_offline.py` mevcut `AtlasFastOwnerSDK/.venv` ortamındaki gerçek USDⓈ-M SDK sürümlerini (`17.6.0`, `binance-common 4.5.1`) ve REST imzalı GET metotlarının Python arayüzünü doğrular. Owner kaynak kodundaki HTTP istek korumasını **mock transport ile**, ağ/kilit/anahtar kullanmadan sınar. Önceki 101 teste 14 kontrol eklenmiştir: **115/115**.
+
+Gerçek Binance üzerinde `query_order` read-only sorgusu `SenderLocked` güvenlik kilidiyle reddedilmiştir. Kilit bypass edilmedi ve canlı SDK nesnesi çalıştırılmadı. Bu nedenle `OrderNotFound` için gerçek Binance yanıtı hâlâ **bekleyen entegrasyon kanıtıdır**.
+
+Teknik rapor: `SDK_OFFLINE_INTEGRATION_20261105.md`.
+
 ## Güvenlik ve sınırlar
 
 Testler yalnızca seçilmiş yürütücü fonksiyonlarını AST üzerinden ve ayrı kopyalanan STOP/yeniden başlatma modüllerini sentetik borsa yanıtlarıyla çalıştırır. Owner uygulaması, ağ bağlantısı, şifre, imzalı GET veya gerçek POST/DELETE testi yapılmaz. Tüm entegre testler ve canlıya alma ayrı inceleme gerektirir.
