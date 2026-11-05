@@ -82,6 +82,14 @@ Yedi paket tek bir **yerel Git sürüm adayı** olarak `atlas-fast-v0.1.0-rc1-of
 
 Bu bir **kontrol akışı simülasyonudur**, gerçek giriş emri veya güvenlik kapısı onayı değildir. `atlas-fast-v0.1.0-rc1-offline-20261105` etiketi değişmez, yeni adımlar sadece geliştirme dalındadır. Ayrıntılar: `RUN_ONCE_OFFLINE_FLOW_20261105.md`.
 
+## Dokuzuncu geliştirme paketi — yeniden başlatma ve WAL yarışı
+
+`_restart_entry_fill` artık ENTRY WAL dosyasının yokluğunu emir yokluğu olarak kabul etmez: tam clientOrderId için imzalı kesin `OrderNotFound` kanıtı gerekir. Reserve-only sıfır-fill restart çözümü de ek `_resolve_verified_zero_entry_scope` kanıt kapısından geçer. **9 yeni pozitif/negatif test** eklendi.
+
+**Açık güvenlik engeli:** WAL son okumasından hemen sonra, `resolved` işareti yazılmadan önce yeni ENTRY kaydı eklenebildiği için bir TOCTOU yarışı yeniden üretildi. Bu test `@unittest.expectedFailure` olarak kaydedildi. Toplam **142 test: 141 başarılı, 1 bilinen/çözülmemiş güvenlik başarısızlığı**. Bu nedenle **NO-GO FOR LIVE**, otomatik WAL çözümü üretime dağıtılmamalı.
+
+Teknik rapor: `WAL_RACE_REVIEW_20261105.md`. RC1 etiketi değiştirilmedi.
+
 ## Güvenlik ve sınırlar
 
 Testler yalnızca seçilmiş yürütücü fonksiyonlarını AST üzerinden ve ayrı kopyalanan STOP/yeniden başlatma modüllerini sentetik borsa yanıtlarıyla çalıştırır. Owner uygulaması, ağ bağlantısı, şifre, imzalı GET veya gerçek POST/DELETE testi yapılmaz. Tüm entegre testler ve canlıya alma ayrı inceleme gerektirir.

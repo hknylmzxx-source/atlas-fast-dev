@@ -1184,10 +1184,19 @@ def _restart_wal_records():
     return out
 
 def _restart_entry_fill(venue,records,scope,symbol,cid):
-    """Signed entry status. No WAL ENTRY record -> never sent -> '0'."""
+    """Exact signed order status; missing ENTRY WAL is NOT sufficient proof."""
     name="ENTRY_"+hashlib.sha256((scope+"ENTRY"+cid).encode()).hexdigest()+".json"
     if name not in records:
-        return "0"
+        # A crash may occur between exchange acceptance and durable journal
+        # visibility. Never infer zero-fill merely from the absence of WAL.
+        try:
+            venue.read("query_order",symbol=symbol,
+                       orig_client_order_id=cid,recv_window=5000)
+        except OrderNotFound:
+            return "0"
+        except Exception:
+            return None
+        return None
     try:
         r=venue.read("query_order",symbol=symbol,orig_client_order_id=cid,recv_window=5000)
     except Exception:
@@ -1228,6 +1237,19 @@ def _restart_one(gate,inputs,venue,records,pending):
     result=policy_settle_after_flat(gate,inputs,venue,{"entry":{"symbol":symbol}},scope,filled)
     if result is None:
         return "KEPT_SETTLE_REFUSED"
+    if filled=="0" and not any(
+            name.startswith("ENTRY_") and (row.get("detail") or {}).get("scope")==scope
+            for name,row in records.items()):
+        # Reserve-only scope: do not accept a simple FLAT snapshot as proof
+        # that an ENTRY never reached Binance. The full exact-order-absence
+        # and signed ledger/WAL check must pass before any resolved marker.
+        try:
+            _resolve_verified_zero_entry_scope(
+                gate,venue,{"entry":{"symbol":symbol,"newClientOrderId":cid}},
+                scope,result)
+        except Exception:
+            return "KEPT_ZERO_ENTRY_WAL_PROOF_INCOMPLETE"
+        return "SETTLED"
     if not (LOG/("resolved_"+scope+".json")).exists():
         mark_scope_resolved(scope,"RESTART_SETTLED_SIGNED_FLAT")
     return "SETTLED"

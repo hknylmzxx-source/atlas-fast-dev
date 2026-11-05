@@ -509,6 +509,25 @@ class ZeroEntryResolutionProofTests(unittest.TestCase):
         self.settled=result
         self._reject("ZERO_ENTRY_SCOPE_HAS_OTHER_WAL_OR_INCIDENT")
 
+    @unittest.expectedFailure
+    def test_known_race_between_final_wal_scan_and_resolution_marker(self):
+        """Known NO-GO gap: another writer could append ENTRY before marker.
+
+        This expected failure is retained as a visible security blocker, not
+        counted as passing evidence. Close only with a proven shared fence.
+        """
+        s=self.s
+        original=s.ns["mark_scope_resolved"]
+        def concurrent_append_before_marker(scope,outcome):
+            s.journal("ENTRY","CONCURRENT-RACE",{
+                "scope":scope,"symbol":SYM,"client_id":ENTRY_ID})
+            return original(scope,outcome)
+        s.ns["mark_scope_resolved"]=concurrent_append_before_marker
+        s.ns["_resolve_verified_zero_entry_scope"](
+            s.gate,s.venue,{"entry":ENTRY},SCOPE,self.settled)
+        self.assertFalse((s.wal/("resolved_"+SCOPE+".json")).exists(),
+                         "Unsafe release: a new ENTRY WAL appeared before marker")
+
     def test_exact_signed_absence_is_required_by_source(self):
         fn=next(x for x in TREE.body if isinstance(x,ast.FunctionDef)
                 and x.name=="_resolve_verified_zero_entry_scope")
