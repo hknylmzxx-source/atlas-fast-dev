@@ -1,6 +1,6 @@
 # ATLAS FAST — Yalıtılmış geliştirme alanı
 
-Bu depo yalnızca **offline geliştirme** içindir. Mac üzerindeki aktif Owner SDK'ya bağlı değildir; emir gönderilmez ve bu klasördeki yürütücü çalıştırılmaz. Yalnızca dört seçilmiş Python kaynak dosyası, başlangıç SHA-256 manifesti ve testler bulunur. Binance anahtarı, canlı izin, risk defteri veya emir günlüğü kopyalanmaz.
+Bu depo yalnızca **offline geliştirme** içindir. Mac üzerindeki aktif Owner SDK'ya bağlı değildir; emir gönderilmez ve bu klasördeki yürütücü çalıştırılmaz. Dört temel Python kaynak dosyası, iki offline STOP/yeniden başlatma modülü, SHA-256 manifestleri ve testler bulunur. Binance anahtarı, canlı izin, risk defteri veya emir günlüğü kopyalanmaz.
 
 ## İlk geliştirme paketi
 
@@ -34,9 +34,23 @@ Owner'ın tek kullanımlık onayı için **15 saniyelik** mevcut zaman sınırı
 
 Test: `python3 -B -m unittest discover -s tests -v` (AST ile yalnız işlevler + tamamen sahte venue).
 
+## Dördüncü geliştirme paketi — bağlantı kesintisi, STOP ve yeniden başlatma (offline)
+
+**Yalnızca sentetik testler; canlı SDK import edilmez ve hiçbir gerçek Binance emri gönderilmez.**
+
+Bu paket, Owner SDK'nin `restart_coverage.py` ve `stop_ambiguity_guard.py` dosyalarının salt-okunur kaynak kopyalarını ekler. Kaynak SHA-256 değerleri `GUARD_SOURCE_SNAPSHOT.json` içindedir; günlük, API anahtarı, oturum veya borsa durum dosyası kopyalanmadı.
+
+- `tests/test_order_failure_injection.py`: AST ile yalnız `one_write`, `place_stop_write` ve yeniden başlatma için gerekli fonksiyonları çalıştırır. Ağ bağlantısı kopmuş gibi davranan sahte `post_once` sonucunda **ENTRY/STOP POST tekrarlanmaz**. Eksik imzalı okuma en fazla altı GET simülasyonu üretir; yeniden POST yapmaz. STOP'da yalnızca gönderim öncesi geçici lease hatasında sınırlı tekrar olur. Hatalı WAL, incident ve aktif STOP manifesti yeni girişe engeldir.
+- `tests/test_restart_guard_offline.py`: `restart_coverage` içindeki gerçek koruma tarama ve gözlem penceresi mantığı, sahte pozisyonlar ve alarmlarla sınanır. Korunmamış açık pozisyon, belirsiz STOP, süre aşımı, alarm günlüğü hatası ve WAL okuma hatası yeni girişi kapatır. `FLAT_NO_STOP_SENT` tek başına stop koruması anlamına gelmez; `startup_reconcile` ayrıca WAL çözümünü kontrol etmelidir.
+- `tests/test_planned_stop_binding.py`: `stop_ambiguity_guard.classify` gerçekte planlanan STOP'a bağlanır. Yanlış trigger, workingType, yabancı emir veya zaman aşımında `PROTECTED` iddiası verilmez.
+- Gözlem penceresi yalnızca **okuma anlarındaki** kanıtları temsil eder; kesintisiz fiziksel koruma garantisi değildir. R2 acil emir kanalı kapalıdır; otomatik düzleştirme denenmedi.
+- Sınırlama: Tek başına AST ve modül düzeyindeki testler, canlı Owner SDK'nın tüm bağımlılıklarını veya gerçek ağ davranışını doğrulamaz. Entegre sürüm testi ve ayrı dağıtım incelemesi gereklidir.
+
+Komut: `python3 -B -m unittest discover -s tests -q`.
+
 ## Güvenlik ve sınırlar
 
-Testler saf fonksiyonları ve yürütücünün AST'den **yalnız risk ve piyasa-verisi toplama fonksiyonlarını** sahte borsa yanıtlarıyla çalıştırır. Owner uygulaması, ağ bağlantısı, şifre, imzalı GET veya gerçek POST/DELETE testi yapılmaz. Tüm entegre testler ve canlıya alma ayrı inceleme gerektirir.
+Testler yalnızca seçilmiş yürütücü fonksiyonlarını AST üzerinden ve ayrı kopyalanan STOP/yeniden başlatma modüllerini sentetik borsa yanıtlarıyla çalıştırır. Owner uygulaması, ağ bağlantısı, şifre, imzalı GET veya gerçek POST/DELETE testi yapılmaz. Tüm entegre testler ve canlıya alma ayrı inceleme gerektirir.
 
 Bilinen sözleşme borcu: `order_filters.py` içindeki `margin_1x_usdt` çıktı adı eskidir; değer aslında kaldıraçla bölünmüş marjindir. Olası tüketicileri bozmamak için ilk pakette alan adı değiştirilmedi.
 

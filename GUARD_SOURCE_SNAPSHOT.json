@@ -1,0 +1,14 @@
+{
+  "files": [
+    {
+      "name": "restart_coverage.py",
+      "source_sha256": "239d74b69b25001782e26226281081bbb8cbb88a735e81172a3bf6d161e31f82"
+    },
+    {
+      "name": "stop_ambiguity_guard.py",
+      "source_sha256": "1b4606790d70421cad4bd708c082b01294424ae433f5fe981cee8c975214d191"
+    }
+  ],
+  "mode": "SOURCE_COPY_ONLY_NO_SECRETS_OR_LIVE_STATE",
+  "schema": "ATLAS_FAST_ISOLATED_GUARD_SOURCE_SNAPSHOT_V1"
+}
