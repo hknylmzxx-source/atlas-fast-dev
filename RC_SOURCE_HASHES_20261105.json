@@ -1,0 +1,104 @@
+{
+  "baseline_development_commit": "269217a68ee0f7336695f8de82c575abdf8b2842",
+  "binance_order_cancelled": false,
+  "binance_order_posted": false,
+  "candidate": "atlas-fast-v0.1.0-rc1-offline-20261105",
+  "created_utc": "2026-11-05T09:50:25.798225+00:00",
+  "last_successful_test_count": 115,
+  "live_write_allowed": false,
+  "manifest_sha256": "e05e3067e957329362cafb3ca1bb5ff70173755becb24153d26bbe63f4010878",
+  "mode": "OFFLINE_RELEASE_CANDIDATE_ONLY_NO_LIVE_DEPLOYMENT",
+  "production_owner_sdk_modified": false,
+  "release_go": false,
+  "requirements": {
+    "binance-common": "4.5.1",
+    "binance-sdk-derivatives-trading-usds-futures": "17.6.0"
+  },
+  "schema": "ATLAS_FAST_OFFLINE_RELEASE_SOURCE_HASHES_V1",
+  "source_and_test_hashes": [
+    {
+      "deployed": false,
+      "file": "owner_single_execution.py",
+      "live_source_snapshot_sha256": "3015b35585a67841b3673e2718148568ae12df5071f71fbe4de5b1fdeabc9765",
+      "sha256": "03dc49f62d29dd0de214a12a947a6679306ee352613c3ca9d607bc2c3debea0f"
+    },
+    {
+      "deployed": false,
+      "file": "order_filters.py",
+      "live_source_snapshot_sha256": "6a9585b47b56426f227ee50a8aadde7a371bd7e3ce5d34170a7998bddcd28bef",
+      "sha256": "a31205b9470a715c1448a24cc73571bf45d8da1469bd41fd99ee41439fdf6e9e"
+    },
+    {
+      "deployed": false,
+      "file": "policy_integration.py",
+      "live_source_snapshot_sha256": "877d9030950aa6d03f31d60e44d622572888ae9ef74173335ffc849b41104b91",
+      "sha256": "877d9030950aa6d03f31d60e44d622572888ae9ef74173335ffc849b41104b91"
+    },
+    {
+      "deployed": false,
+      "file": "atlas_integration_inputs_core.py",
+      "live_source_snapshot_sha256": "1e071e39c6c7a6a982450e4bd4d577e2eb49a7fb5fe77352e6da882e89000110",
+      "sha256": "1e071e39c6c7a6a982450e4bd4d577e2eb49a7fb5fe77352e6da882e89000110"
+    },
+    {
+      "deployed": false,
+      "file": "restart_coverage.py",
+      "live_source_snapshot_sha256": "239d74b69b25001782e26226281081bbb8cbb88a735e81172a3bf6d161e31f82",
+      "sha256": "239d74b69b25001782e26226281081bbb8cbb88a735e81172a3bf6d161e31f82"
+    },
+    {
+      "deployed": false,
+      "file": "stop_ambiguity_guard.py",
+      "live_source_snapshot_sha256": "1b4606790d70421cad4bd708c082b01294424ae433f5fe981cee8c975214d191",
+      "sha256": "1b4606790d70421cad4bd708c082b01294424ae433f5fe981cee8c975214d191"
+    },
+    {
+      "deployed": false,
+      "file": "tests/test_binance_order_absence_contract.py",
+      "sha256": "58a1c6d1b1e08314ece5a04553c801b857e61aca7893023ebd0ea24a44ad02b4"
+    },
+    {
+      "deployed": false,
+      "file": "tests/test_market_snapshot_sequencing.py",
+      "sha256": "6b1d9533221783a4a999612ff899718a19a692f80d9be8f6fe6c3ef535e03ee6"
+    },
+    {
+      "deployed": false,
+      "file": "tests/test_order_failure_injection.py",
+      "sha256": "d64e24f7c7d3ffbd8830853f9c62c639e990f7f544b8fb2d9863a662c419709e"
+    },
+    {
+      "deployed": false,
+      "file": "tests/test_owner_approval_deadline.py",
+      "sha256": "6a28c4a675f60990b376990e21590fcc7574f017a215c5eb8d57ebcb559c9d6c"
+    },
+    {
+      "deployed": false,
+      "file": "tests/test_planned_stop_binding.py",
+      "sha256": "aa2cdc40809d1b71545f6ea778c48ff97b759aff93d24add5f07e06a0ed78313"
+    },
+    {
+      "deployed": false,
+      "file": "tests/test_preflight_diagnostics.py",
+      "sha256": "95d2800dfbadec82b6e5098a1950cb8e9d2bca8acb699255ae30d68de2180ec3"
+    },
+    {
+      "deployed": false,
+      "file": "tests/test_restart_guard_offline.py",
+      "sha256": "8090a2c5aad31b70e759ff2d4ce44c8b1888b2eda1f31de58be1ad5dd1e42705"
+    },
+    {
+      "deployed": false,
+      "file": "tests/test_safety_chain_integration.py",
+      "sha256": "3b33db21d2dcd51734cacb0cf93fc9d284d8c629be906e0e5e91cf69e0c145ec"
+    },
+    {
+      "deployed": false,
+      "file": "tests/test_sdk_transport_offline.py",
+      "sha256": "33f641f95b519961ad259883bd2afd180495445d9ea60258786428c63101eda6"
+    }
+  ],
+  "source_file_count": 6,
+  "test_command": "AtlasFastOwnerSDK/.venv/bin/python -B -m unittest discover -s tests -q",
+  "test_file_count": 9
+}

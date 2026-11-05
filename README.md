@@ -72,6 +72,10 @@ Gerçek Binance üzerinde `query_order` read-only sorgusu `SenderLocked` güvenl
 
 Teknik rapor: `SDK_OFFLINE_INTEGRATION_20261105.md`.
 
+## Offline sürüm adayı RC1
+
+Yedi paket tek bir **yerel Git sürüm adayı** olarak `atlas-fast-v0.1.0-rc1-offline-20261105` etiketiyle tanımlanır. Belgeler: `RELEASE_CANDIDATE_20261105.md`, `GO_NO_GO_CHECKLIST_20261105.md` ve `RC_SOURCE_HASHES_20261105.json`. Sürümün kararı **NO-GO FOR LIVE** olup GitHub'a gönderim, aktif Owner SDK güncellemesi, canlı Binance emir izni veya risk ayarı değişikliği içermez.
+
 ## Güvenlik ve sınırlar
 
 Testler yalnızca seçilmiş yürütücü fonksiyonlarını AST üzerinden ve ayrı kopyalanan STOP/yeniden başlatma modüllerini sentetik borsa yanıtlarıyla çalıştırır. Owner uygulaması, ağ bağlantısı, şifre, imzalı GET veya gerçek POST/DELETE testi yapılmaz. Tüm entegre testler ve canlıya alma ayrı inceleme gerektirir.
