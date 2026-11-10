@@ -152,3 +152,23 @@ hata türleri yukarıda kaydedildi.
 - Gönderim hedefi: `origin` → `hknylmzxx-source/atlas-fast-dev`,
   `refs/heads/codex/f00-ortam`; komut: `git push origin codex/f00-ortam`.
   Gönderim sonucu ve son commit kimliği işlem sonrasında ayrıca doğrulanacaktır.
+
+## G40 / Issue #5 — 10 Kasım 2026 ek kaydı
+
+Yukarıdaki F-00/A kaydı tarihseldir; G40 çalışması ve uygulanmamış ağsız SDK
+kurulum/geri dönüş planı [G40_DEVIR.md](G40_DEVIR.md) içindedir.
+Worktree: `/Users/hakanyilmaz/Atlas/FAST_DEV_codex_g40`;
+dal: `codex/g40-test-stability`; başlangıç/mevcut HEAD:
+`2ed4133dd4be3a84b65834701b5c2584db40de66`. Yeni commit yoktur.
+
+Yeni dosyalar `tests/test_clock_fixture_offline_g40.py` ve `G40_DEVIR.md`;
+bu dosyaya yalnız G40 bağlantısı eklendi. Eski kaynak/testler değiştirilmedi.
+Eski hedefte kontrollü ebeveyn gecikmesi aynı assertion hatasını 5/5 üretti;
+yeni dosya beş tekrar koşusunda 25/25 geçti. Son tam paket **491 testte
+489 başarılı, 2 mevcut SDK hatası, 0 atlama; çıkış 1**, dolayısıyla yeşil değil.
+İlk geliştirme hataları ve tüm test kayıtları G40 notunda açıkça yer alır.
+
+Eski fixture/deadline yarışları düzeltilmedi; SDK/paket veya `.venv` kurulmadı.
+Sonraki adım Claude'un bağımsız son incelemesidir. Kurulum ve kapsam dışındaki
+gelecek eski dosya değişiklikleri ayrı kullanıcı onayı gerektirir.
+Kullanıcı talimatı gereği commit/push/merge/PR yapılmadı.
