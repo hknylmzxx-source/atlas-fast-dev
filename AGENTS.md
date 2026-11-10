@@ -34,11 +34,16 @@ Bu dosya Claude Code ve Codex CLI için ortak kurallardır. Claude Code bu dosya
 - Canlı sistem klasörleri ajanlar için **yasak bölgedir**: `/Users/Shared/Atlas/` ve `~/Atlas/` altındaki `AKTIF_*` klasörleri (AKTIF_OWNER_SDK, AKTIF_OWNER_BRIDGE, AKTIF_OWNER_CONNECTOR). Buradaki dosyalar değiştirilmez, kopyalanmaz, çalıştırılmaz; süreçler durdurulmaz veya yeniden başlatılmaz. Okuma gerekiyorsa önce kullanıcıdan izin istenir.
 - Canlı SDK modülleri import edilmez; testler sahte (mock) borsa ile çalışır.
 - Aşağıdaki dosyalar kritiktir; değişiklik yalnızca ajanın kendi dalında önerilir, ayrı kullanıcı onayı ve diğer ajanın incelemesi gerekir:
-  - `fast_signal_live_executor.py` (emir gönderimi)
-  - `live_exec_config.json` (canlı yapılandırma)
-  - `atlas_limits.json` (risk limitleri)
-  - Kill-switch, STOP/R2 koruması ve günlük zarar kilidi modülleri
-  - <!-- KULLANICI: buraya diğer kritik dosyaları ekle -->
+  - Bu depoda:
+    - `owner_single_execution.py` (emir yürütme, MAX_RISK/MAX_LEVERAGE sabitleri)
+    - `order_filters.py` (emir filtreleri ve risk tavanları)
+    - `policy_integration.py` (PolicyGate: risk bütçesi ve güncellik kapısı)
+    - `stop_ambiguity_guard.py` (STOP koruması)
+    - `emergency_latch_candidate.py` (acil durum kilidi)
+    - `restart_coverage.py` (yeniden başlatma güvenliği)
+  - Canlı sistemde (yalnızca bilgi; ajanlar bu dosyalara erişmez):
+    - `fast_signal_live_executor.py`, `live_exec_config.json`, `atlas_limits.json`
+  - Kill-switch, STOP/R2 koruması ve günlük zarar kilidiyle ilgili her modül
 - Canlı işlem yetkilerini, risk limitlerini veya kilitleri değiştiren her işlem ayrı kullanıcı onayı ve bağımsız doğrulama gerektirir.
 
 ## 4. Dosya ve sistem güvenliği
