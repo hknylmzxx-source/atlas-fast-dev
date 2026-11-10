@@ -142,5 +142,13 @@ hata türleri yukarıda kaydedildi.
 
 ## Commit kaydı
 
-Dal: `codex/f00-ortam`. Teşhis commit'inin kimliği, commit oluşturulduktan sonra
-ayrı bir kayıt commit'iyle bu bölüme eklenecektir; geçmiş yeniden yazılmayacaktır.
+- Dal: `codex/f00-ortam`.
+- Teşhis ve kurulum planı commit'i:
+  `296bcc59b16d04e8017aef08a6f15164bfa6afb2`.
+- Bu kimliği devir notuna ekleyen sonraki commit yalnızca kayıt güncellemesidir.
+  Bir commit kendi kimliğini kendi içeriğine yazamayacağı için son kayıt
+  commit'i `git log -1 --format=%H -- DEVIR_NOTU.md` ile bulunabilir; kimliği
+  kullanıcıya son raporda ayrıca verilecektir. Commit amend/rebase yapılmadı.
+- Gönderim hedefi: `origin` → `hknylmzxx-source/atlas-fast-dev`,
+  `refs/heads/codex/f00-ortam`; komut: `git push origin codex/f00-ortam`.
+  Gönderim sonucu ve son commit kimliği işlem sonrasında ayrıca doğrulanacaktır.
