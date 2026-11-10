@@ -12,7 +12,9 @@ Bu dosya Claude Code ve Codex CLI için ortak kurallardır. Claude Code bu dosya
 
 ## 2. Git ve çalışma alanı
 
-- Bu depo (`~/Atlas/ATLAS_FAST_DEV`) yalnızca çevrimdışı geliştirme içindir; uzak (remote) depo yoktur.
+- Bu depo (`~/Atlas/ATLAS_FAST_DEV`) yalnızca çevrimdışı geliştirme içindir. GitHub kopyası: `hknylmzxx-source/atlas-fast-dev` (özel).
+- Ajanlar yalnızca kendi dallarını (`claude/*`, `codex/*`) GitHub'a gönderir (`git push origin <kendi-dalı>`). main ve `dev/*` dallarına gönderim yapılmaz; `--force` kullanılmaz.
+- Biten her iş için GitHub'da Pull Request açılması kullanıcıya önerilir; birleştirmeyi yalnızca kullanıcı yapar.
 - Claude Code ve Codex ayrı Git worktree ve branch kullanır:
   - Claude Code: `~/Atlas/FAST_DEV_claude`, dallar `claude/<konu>`
   - Codex: `~/Atlas/FAST_DEV_codex`, dallar `codex/<konu>`
