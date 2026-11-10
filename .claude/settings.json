@@ -1,0 +1,37 @@
+{
+  "permissions": {
+    "defaultMode": "default",
+    "disableBypassPermissionsMode": "disable",
+    "deny": [
+      "Read(//Users/Shared/Atlas/**)",
+      "Edit(//Users/Shared/Atlas/**)",
+      "Read(~/Atlas/AKTIF_*/**)",
+      "Edit(~/Atlas/AKTIF_*/**)",
+      "Edit(~/Atlas/ATLAS_FAST_DEV/**)",
+      "Edit(~/Atlas/FAST_DEV_codex/**)",
+      "Read(**/.env)",
+      "Read(**/.env.*)",
+      "Read(**/*.secret)",
+      "Read(**/*.pem)",
+      "Read(**/*.key)",
+      "Bash(security:*)",
+      "Bash(env)",
+      "Bash(env:*)",
+      "Bash(printenv)",
+      "Bash(printenv:*)",
+      "Bash(set)",
+      "Bash(launchctl:*)",
+      "Bash(crontab:*)",
+      "Bash(git push --force:*)",
+      "Bash(git push -f:*)",
+      "Bash(git push origin main:*)",
+      "Bash(git push origin dev/:*)",
+      "Bash(git push origin HEAD:main:*)",
+      "Bash(git reset --hard:*)",
+      "Bash(git rebase -i:*)",
+      "Bash(git filter-branch:*)",
+      "Bash(git merge:*)",
+      "Bash(rm -rf:*)"
+    ]
+  }
+}
