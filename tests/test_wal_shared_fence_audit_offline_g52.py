@@ -83,9 +83,12 @@ class StaticAuditTests(unittest.TestCase):
 
     def test_readonly_directory_open_is_not_mislabeled_as_wal_writer(self):
         row = next(r for r in self.report["writers"] if r["role"] == "POLICY_RESERVE")
+        # FAZ2: G54 sonrası yazım adapter üzerinden; owner'da doğrudan writable open kalmamalı.
         self.assertEqual(len(row["wal_sites"]), 1)
-        self.assertIn("os.O_WRONLY", row["wal_sites"][0]["arguments"][1])
-        self.assertEqual(len(row["related_call_signals"]), 2)
+        self.assertEqual(row["wal_sites"][0]["callee"], "append_reservation")
+        direct = [c for c in self.report["calls"] if c["caller"] == "write_policy_reserve_record"
+                  and c["callee"] in ("os.open", "os.fsync")]
+        self.assertEqual(direct, [])
 
     def test_global_lock_mutation_lease_and_writer_fence_are_distinct(self):
         rows = self.report["distinctions"]

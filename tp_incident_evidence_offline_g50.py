@@ -29,12 +29,13 @@ INCIDENT_DAYS = ("2026-11-06", "2026-11-09")
 MAX_BYTES = 1_048_576
 MAX_EVENTS = 2000
 # Statik geliştirme kaynağı referansı; import, çalıştırma veya canlı sürüm iddiası yok.
+# FAZ2 (11.11): satır numaraları G54 owner kaynağına göre güncellendi (AST davranışı aynı).
 SOURCE_REFERENCE = {
     "base": "1d9e3aa0131a664b1ddb8f7100ada3f6e7719b5b",
     "source": "owner_single_execution.py",
-    "actual_order": 564,
-    "checked": 571,
-    "cleanup_owned_exits": 751,
+    "actual_order": 561,
+    "checked": 568,
+    "cleanup_owned_exits": 748,
     "callgraph": [
         "run_once -> one_write -> checked -> actual_order",
         "actual_order: STOP -> query_algo_order(clientAlgoId)",

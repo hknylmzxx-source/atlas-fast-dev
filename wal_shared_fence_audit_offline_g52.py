@@ -128,8 +128,9 @@ def audit_source(source):
         ("CANCEL_STOP", "cleanup_owned_exits", "journal", "'CANCEL_STOP'", "venue.delete_once"),
         ("CANCEL_TP", "cleanup_owned_exits", "journal", "'CANCEL_TP' + str(index)", "venue.delete_once"),
         ("EMERGENCY", "_emergency_flatten_locked", "journal", "'EMERGENCY'", "venue.post_once"),
-        ("POLICY_RESERVE", "write_policy_reserve_record", "os.open", None, "os.fsync"),
-        ("incident", "emergency_note", "os.open", None, "os.fsync"),
+        # FAZ2: G54 sonrası doğrudan os.open/os.fsync ortak adapter'a taşındı.
+        ("POLICY_RESERVE", "write_policy_reserve_record", "append_reservation", None, "LOG.mkdir"),
+        ("incident", "emergency_note", "append_incident", None, "append_incident"),
     )
     writers = []
     for role, caller, sink, first_arg, related in specs:

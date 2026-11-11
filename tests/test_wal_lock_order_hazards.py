@@ -78,8 +78,9 @@ class LockOrderHazardTests(unittest.TestCase):
             self.incident()
         self.assertFalse((self.root/"incident_OFFLINE_SCOPE.json").exists())
 
-    def test_current_executor_has_not_wired_experimental_fence(self):
-        """Do not confuse offline candidate passing with production integration."""
+    def test_g54_executor_wires_adapter_but_not_raw_fence(self):
+        """FAZ2: G54 owner'ı adapter'a bağladı; ham fence modülü doğrudan import edilmez.
+        Bu bir geliştirme kopyası gerçeğidir, canlı entegrasyon kanıtı değildir."""
         import ast
         tree=ast.parse((Path(__file__).resolve().parents[1]/
                         "owner_single_execution.py").read_text())
@@ -92,7 +93,7 @@ class LockOrderHazardTests(unittest.TestCase):
             else:
                 names.extend(alias.name for alias in n.names)
         self.assertNotIn("wal_writer_fence_candidate",names)
-        self.assertNotIn("wal_owner_write_adapter_candidate",names)
+        self.assertIn("wal_owner_write_adapter_candidate",names)
 
 if __name__=="__main__":
     unittest.main()
