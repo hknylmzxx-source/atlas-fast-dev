@@ -584,6 +584,8 @@ def actual_order(venue,role,wire):
 def checked(venue,role,wire):
     """A separate signed Binance GET is the only accepted receipt."""
     r=actual_order(venue,role,wire)
+    try:_telemetry_observe(role,wire,r,"SIGNED_READBACK")   # G56: append-only, never blocks
+    except Exception:pass
     if type(r) is not dict:
         raise Blocked("SIGNED_RECEIPT_NOT_OBJECT")
     if any(r.get(k)!=wire.get(k) for k in ("symbol","side","positionSide")):
@@ -961,6 +963,8 @@ def _policy_inputs_market_last(inputs, venue, bundle, account):
     after_income = _now_ms()
     market = inputs.policy_market(venue, bundle, account)
     after_market = _now_ms()
+    try:_telemetry_pre_entry(bundle, market)   # G56: append-only, never blocks
+    except Exception:pass
     if (after_income < begin or after_market < after_income):
         raise Blocked("POLICY_SNAPSHOT_LOCAL_CLOCK_MOVED_BACKWARD")
     if (type(market) is not dict
@@ -1357,6 +1361,72 @@ def restart_protection_gate(guard):
             rep.get("wal"),",".join(states)[:80],len(rep.get("alarm_failures") or ())))
     return rep
 
+_TELEMETRY_ARMED=False   # G56: set only by main() (real owner run); imports/tests never write
+
+def _telemetry():
+    """G56: owner-private append-only telemetry (separate from the WAL). None on any error
+    and None unless main() armed it, so test harnesses never touch the owner directory."""
+    if _TELEMETRY_ARMED is not True:
+        return None
+    try:
+        import fast_telemetry_g56
+        return fast_telemetry_g56.default(PRIVATE)
+    except Exception:
+        return None
+
+def _telemetry_observe(role,wire,receipt,phase):
+    """G56: record a signed order receipt (status/algoStatus, ids, type, reduceOnly).
+    Never raises; never changes the receipt or the checks that follow."""
+    try:
+        t=_telemetry()
+        if t is None:return
+        cid=wire.get("clientAlgoId") if role=="STOP" else wire.get("newClientOrderId")
+        if type(receipt) is dict:
+            t.record_order_observation(role,receipt,phase=phase,client_id=cid)
+        else:
+            t.record_order_error(role,cid,code="RECEIPT_NOT_OBJECT",msg=type(receipt).__name__)
+    except Exception:
+        pass
+
+def _telemetry_pre_entry(bundle,market):
+    """G56: pre-entry signed market reference (mark/last) for later slippage. Never raises."""
+    try:
+        t=_telemetry()
+        if t is None:return
+        e=bundle.get("entry",{}) if type(bundle) is dict else {}
+        t.record_pre_entry_reference(bundle_fp=fp(bundle),symbol=e.get("symbol"),
+                                     side=e.get("side"),market=market)
+    except Exception:
+        pass
+
+def _tp_exposure_sleep(guard,bundle):
+    """G56: supervision sleep that first runs the read-only TP-exposure audit
+    (<= every 30 s, signed GETs via the guard venue). Alarm channel = guard[1]
+    (same owner alarm as MANUAL_CLOSE_REQUIRED). Sends/cancels nothing; never raises;
+    if the audit cannot be built, raises an alarm once and falls back to time.sleep."""
+    try:
+        import stop_ambiguity_guard as guard_mod
+        import tp_exposure_monitor_g56 as tpm
+        gvenue=guard[2]
+        symbol=bundle["entry"]["symbol"]
+        stop_id=bundle["stop"]["clientAlgoId"]
+        tp_ids=[t["newClientOrderId"] for t in bundle["take_profits"]]
+        own={stop_id:"STOP"}
+        for i,tid in enumerate(tp_ids):own[tid]="TP%d"%(i+1)
+        mon=tpm.TpExposureMonitor(alarm=guard[1],symbol=symbol,own_ids=own,telemetry=_telemetry())
+        def read():
+            return guard_mod.gather(gvenue,symbol=symbol,stop_id=stop_id,tp_ids=tp_ids)
+    except Exception as e:
+        try:guard[1]("TP_EXPOSURE_AUDIT_UNAVAILABLE:%s"%type(e).__name__)
+        except Exception:pass
+        return time.sleep
+    def sleep(seconds):
+        try:mon.maybe_audit(read)
+        except Exception:pass
+        time.sleep(seconds)
+    sleep.monitor=mon
+    return sleep
+
 def make_coverage_monitor(guard,bundle,scope,observer_status,inputs=None):
     """B6-019: CoverageMonitor over the R2-DISABLED guard venue with the
     CONSERVATIVE CANDIDATE thresholds (not owner-approved). 037: run_once
@@ -1401,7 +1471,9 @@ def supervise_until_flat(guard,bundle,scope,inputs=None):
     except Exception:
         observer=lambda:{"status":"DEAD","generated_at_ms":None,"reason":"OBSERVER_SOURCE_UNAVAILABLE"}
     monitor=make_coverage_monitor(guard,bundle,scope,observer,inputs)
-    return rc_mod.supervise(monitor,sleep=time.sleep)
+    try:sleep=_tp_exposure_sleep(guard,bundle)   # G56: read-only TP audit; never blocks
+    except Exception:sleep=time.sleep
+    return rc_mod.supervise(monitor,sleep=sleep)
 
 def flatten_or_supervise(venue,guard,bundle,scope,symbol,reason,inputs=None):
     """037 (Issue #4): emergency_flatten is fenced in production (R2 disabled ->
@@ -1652,6 +1724,8 @@ def main():
         print("OWNER_PRIVATE_INSTALL_AND_EXACT_BUNDLE_ARGUMENT_REQUIRED")
         return 2
     owner_only()
+    global _TELEMETRY_ARMED
+    _TELEMETRY_ARMED=True   # G56: append-only telemetry for this real owner run only
     target=Path(sys.argv[2])
     if target.is_symlink() or target.parent!=PRIVATE or not target.is_file():
         raise Blocked("EXACT_OWNER_PRIVATE_BUNDLE_REQUIRED")
