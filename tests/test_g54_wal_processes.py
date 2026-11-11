@@ -194,7 +194,7 @@ class ProcessFenceTests(OwnerFixture):
         self.assertEqual(self.send(reader,"SNAPSHOT"),"OK")
         self.assertEqual(self.send(writer,"INCIDENT"),"OK")
         self.assertIn("UNRESOLVED_INCIDENT",self.send(reader,"SNAPSHOT"))
-        self.assertIn("WAL_RESOLUTION_MARKER_DISABLED",self.send(reader,"MARK"))
+        self.assertIn("WAL_RESOLUTION_MARKER_NOT_WRITTEN",self.send(reader,"MARK"))
         self.assert_no_marker()
     def test_preloaded_late_entry_after_two_equal_reads_stays_unresolved(self):
         writer=self.child();reader=self.child()
@@ -202,7 +202,7 @@ class ProcessFenceTests(OwnerFixture):
         self.assertEqual(self.send(reader,"SNAPSHOT"),"OK")
         self.assertEqual(self.send(writer,"ENTRY"),"OK")
         self.assertIn("UNRESOLVED_WAL_SCOPE",self.send(reader,"SNAPSHOT"))
-        self.assertIn("WAL_RESOLUTION_MARKER_DISABLED",self.send(reader,"MARK"))
+        self.assertIn("WAL_RESOLUTION_MARKER_NOT_WRITTEN",self.send(reader,"MARK"))
         self.assert_no_marker()
     def test_same_identity_two_processes_never_overwrite(self):
         # Establish the shared inode first: this test isolates flock/O_EXCL
@@ -306,7 +306,7 @@ class ProcessFenceTests(OwnerFixture):
     def test_closed_marker_entrypoint_does_not_wait_for_held_wal(self):
         holder=self.child();reader=self.child()
         self.assertEqual(self.send(holder,"LOCK"),"OK")
-        self.assertIn("WAL_RESOLUTION_MARKER_DISABLED",self.send(reader,"MARK"))
+        self.assertIn("WAL_RESOLUTION_MARKER_NOT_WRITTEN",self.send(reader,"MARK"))
         self.assert_no_marker()
     def test_preloaded_late_reservation_keeps_restart_and_marker_blocked(self):
         writer=self.child();reader=self.child()
@@ -314,7 +314,48 @@ class ProcessFenceTests(OwnerFixture):
         self.assertEqual(self.send(reader,"SNAPSHOT"),"OK")
         self.assertEqual(self.send(writer,"RESERVE"),"OK")
         self.assertIn("UNRESOLVED_WAL_SCOPE",self.send(reader,"SNAPSHOT"))
-        self.assertIn("WAL_RESOLUTION_MARKER_DISABLED",self.send(reader,"MARK"))
+        self.assertIn("WAL_RESOLUTION_MARKER_NOT_WRITTEN",self.send(reader,"MARK"))
+        self.assert_no_marker()
+
+    # G55/Faz 3: kapanış işareti ortak fence altında, yalnız doğrulanan WAL kümesiyle.
+    def marker(self):
+        return self.root/("resolved_"+SCOPE+".json")
+    def test_g55_own_settled_scope_marker_written_then_late_write_refused(self):
+        writer=self.child();other=self.child()
+        self.assertEqual(self.send(writer,"RESERVE"),"OK")
+        self.assertEqual(self.send(writer,"ENTRY"),"OK")
+        self.assertEqual(self.send(writer,"MARK"),"OK")
+        self.assertTrue(self.marker().exists())
+        self.assertEqual(self.send(other,"SNAPSHOT"),"OK")  # sonraki işlem açılabilir
+        reply=self.send(other,"STOP")
+        self.assertIn("SCOPE_ALREADY_RESOLVED_NO_WRITE",reply)
+    def test_g55_late_write_from_other_process_before_marker_refuses(self):
+        writer=self.child();other=self.child()
+        self.assertEqual(self.send(writer,"RESERVE"),"OK")
+        self.assertEqual(self.send(other,"ENTRY"),"OK")  # doğrulamadan sonra geç yazım
+        reply=self.send(writer,"MARK")
+        self.assertIn("SCOPE_WAL_CHANGED_SINCE_VERIFICATION",reply)
+        self.assert_no_marker()
+        self.assertIn("UNRESOLVED_WAL_SCOPE",self.send(other,"SNAPSHOT"))
+    def test_g55_marker_with_held_fence_fails_closed_without_waiting(self):
+        holder=self.child();writer=self.child()
+        self.assertEqual(self.send(writer,"RESERVE"),"OK")
+        self.assertEqual(self.send(holder,"LOCK"),"OK")
+        reply=self.send(writer,"MARK")
+        self.assertIn("WAL_FENCE_BUSY",reply)
+        self.assert_no_marker()
+        self.assertIn("UNRESOLVED_WAL_SCOPE",self.send(writer,"SNAPSHOT"))
+    def test_g55_incident_blocks_own_marker(self):
+        writer=self.child()
+        self.assertEqual(self.send(writer,"RESERVE"),"OK")
+        self.assertEqual(self.send(writer,"INCIDENT"),"OK")
+        self.assertIn("INCIDENT_PRESENT_NO_RESOLVE",self.send(writer,"MARK"))
+        self.assert_no_marker()
+    def test_g55_restart_new_process_has_no_verified_set(self):
+        writer=self.child()
+        self.assertEqual(self.send(writer,"RESERVE"),"OK")
+        fresh=self.child()  # yeniden başlatma: bu süreç hiçbir şey yazmadı
+        self.assertIn("VERIFIED_WAL_SET_MISSING",self.send(fresh,"MARK"))
         self.assert_no_marker()
 
 

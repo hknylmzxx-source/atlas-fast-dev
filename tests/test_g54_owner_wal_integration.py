@@ -50,7 +50,8 @@ def owner_namespace(directory):
         "payload":lambda role,wire:("new_order","/fapi/v1/order",{}),
         "checked":lambda *args:{"status":"SYNTHETIC_CHECKED"},
         "clear_owner_stop_manifest_after_flat":lambda bundle:None,
-        "exposure":lambda account,symbol:Decimal(account["size"])}
+        "exposure":lambda account,symbol:Decimal(account["size"]),
+        "_WAL_SCOPE_NAMES":{}}
     nodes=[CLASSES[n] for n in ("Blocked","PreSendRefused","LeaseRefused")]
     nodes += [FUNCTIONS[n] for n in names]
     exec(compile(ast.Module(body=nodes,type_ignores=[]),"<g54-isolated-owner>","exec"),ns)
@@ -232,10 +233,27 @@ class OwnerWriterTests(OwnerFixture):
             with self.subTest(role=role,identity=identity):
                 with self.assertRaises(self.ns["Blocked"]):self.ns["journal"](role,identity,detail)
         self.assertEqual(list(self.root.glob("*.json")),[])
-    def test_marker_entrypoint_never_writes(self):
+    def test_marker_entrypoint_never_writes_without_verified_set(self):
+        # G55: bu süreç scope'a yazmadıysa (doğrulanmış küme yok) işaret yazılmaz.
+        self.ns["_WAL_SCOPE_NAMES"].clear()
         self.reserve()
-        with self.assertRaisesRegex(self.ns["Blocked"],"WAL_RESOLUTION_MARKER_DISABLED"):
+        self.ns["_WAL_SCOPE_NAMES"].clear()
+        with self.assertRaisesRegex(self.ns["Blocked"],"VERIFIED_WAL_SET_MISSING"):
             self.ns["mark_scope_resolved"](SCOPE,"SIGNED_FLAT")
+        self.assert_no_marker()
+    def test_g55_marker_written_for_own_verified_scope(self):
+        self.ns["_WAL_SCOPE_NAMES"].clear()
+        self.reserve()
+        self.ns["mark_scope_resolved"](SCOPE,"SIGNED_FLAT")
+        self.assertTrue((self.root/("resolved_"+SCOPE+".json")).exists())
+        self.ns["startup_reconcile"]()  # sonraki işlem bloklanmaz
+        with self.assertRaises(self.ns["Blocked"]):  # çözülmüş scope'a geç yazım reddedilir
+            self.ns["journal"]("STOP","LATE_STOP",{"scope":SCOPE,"symbol":SYMBOL,"client_id":"late"})
+    def test_g55_explicit_verified_set_mismatch_refuses(self):
+        self.ns["_WAL_SCOPE_NAMES"].clear()
+        self.reserve()
+        with self.assertRaisesRegex(self.ns["Blocked"],"SCOPE_WAL_CHANGED_SINCE_VERIFICATION"):
+            self.ns["mark_scope_resolved"](SCOPE,"RESTART",frozenset({"ENTRY_X.json"}))
         self.assert_no_marker()
 
 
@@ -469,7 +487,7 @@ class StaticParticipationTests(unittest.TestCase):
         }.items():self.assert_baseline(name,digest)
     def test_resolve_zero_entry_and_startup_ast_unchanged_from_base(self):
         for name,digest in {
-            "mark_scope_resolved":"1c620311c5d2fa64586a4d9bcb3a1c071b882d7075fd7deb9310629611a3877d",
+            # mark_scope_resolved G55'te bilinçli olarak değişti (bkz. FAZ3_RAPOR.md); hash sabitinden çıkarıldı.
             "_resolve_verified_zero_entry_scope":"f3bdca56cc7fbde3a2373d2c6ac79cb0ec1141edb50ef0fe438d076afb14298f",
             "startup_reconcile":"1ff1f1f98bb4c77acdd66753444d821221fe8bfaa457349b15cbc7aad6ca37ed",
         }.items():self.assert_baseline(name,digest)
@@ -481,9 +499,14 @@ class StaticParticipationTests(unittest.TestCase):
             self.assertEqual(sum(isinstance(n.func,ast.Name) and n.func.id==callee for n in calls),1)
             self.assertFalse(any(isinstance(n.func,ast.Attribute) and n.func.attr in ("open","write","fsync") for n in calls))
     def test_resolvers_stay_unconditional_or_terminal_blocked(self):
+        # G55: işaret artık ortak fence'li resolver'a tek çağrı; her hata Blocked'a dönüşür.
         marker=FUNCTIONS["mark_scope_resolved"]
-        self.assertEqual(len(marker.body),2)
-        self.assertIsInstance(marker.body[-1],ast.Raise)
+        calls=[n.func.id for n in ast.walk(marker) if isinstance(n,ast.Call) and isinstance(n.func,ast.Name)]
+        self.assertEqual(calls.count("resolve_settled_scope"),1)
+        self.assertFalse(any(isinstance(n,ast.Call) and isinstance(n.func,ast.Attribute)
+                             and n.func.attr in ("open","write","fsync") for n in ast.walk(marker)))
+        handlers=[n for n in ast.walk(marker) if isinstance(n,ast.ExceptHandler)]
+        self.assertTrue(handlers and all(isinstance(h.body[-1],ast.Raise) for h in handlers))
         self.assertIsInstance(FUNCTIONS["_resolve_verified_zero_entry_scope"].body[-1],ast.Raise)
         for name in ("journal","emergency_note","write_policy_reserve_record"):
             self.assertFalse(any(isinstance(n,ast.Name) and n.id in

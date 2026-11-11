@@ -87,6 +87,35 @@ def _strict_block(node, reason):
             and call.args[0].value == reason)
 
 
+def _fenced_resolver(node):
+    """G55/Faz 3 kalıbı: tek try; gövde yalnız resolve_settled_scope'a tek çağrı içerir,
+    doğrudan open/write/fsync yok; her except dalı Blocked fırlatarak biter.
+    Yalnız kaynak işaretidir; runtime fence kanıtı DEĞİLDİR."""
+    if not isinstance(node, ast.FunctionDef) or node.decorator_list:
+        return False
+    body = list(node.body)
+    if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant):
+        if isinstance(body[0].value.value, str):
+            body.pop(0)
+    if len(body) != 1 or not isinstance(body[0], ast.Try):
+        return False
+    attempt = body[0]
+    if attempt.orelse or attempt.finalbody or not attempt.handlers:
+        return False
+    calls = [n for stmt in attempt.body for n in ast.walk(stmt) if isinstance(n, ast.Call)]
+    if sum(_dotted(c.func) == "resolve_settled_scope" for c in calls) != 1:
+        return False
+    if any(_dotted(c.func).split(".")[-1] in ("open", "write", "fsync", "replace", "rename")
+           for c in calls):
+        return False
+    for handler in attempt.handlers:
+        last = handler.body[-1] if handler.body else None
+        if not (isinstance(last, ast.Raise) and isinstance(last.exc, ast.Call)
+                and _dotted(last.exc.func) == "Blocked"):
+            return False
+    return True
+
+
 def audit_source(source):
     """Yalnız verilen metni AST ile okur; dosya yolu veya import kabul etmez.
 
@@ -120,6 +149,7 @@ def audit_source(source):
     calls.sort(key=lambda row: (row["line"], row["caller"]))
     markers = definitions.get("mark_scope_resolved", [])
     strict = len(markers) == 1 and _strict_block(markers[0], MARKER_REASON)
+    fenced = len(markers) == 1 and not strict and _fenced_resolver(markers[0])
     specs = (
         ("ENTRY", "one_write", "journal", "role", "venue.acquire_mutation_lease"),
         ("STOP", "one_write", "journal", "role", "venue.acquire_mutation_lease"),
@@ -183,10 +213,12 @@ def audit_source(source):
                 writers=writers, distinctions=distinctions,
                 duplicate_definitions=sorted(k for k, v in definitions.items() if len(v) > 1),
                 marker_strict_block_observed=strict,
+                marker_fenced_resolver_observed=bool(fenced),
                 zero_entry_terminal_block_observed=bool(zero_terminal_block),
                 marker_callers=[c for c in calls if c["callee"] == "mark_scope_resolved"],
-                decision=decision("UNPROVEN" if strict else "FAIL",
+                decision=decision("UNPROVEN" if (strict or fenced) else "FAIL",
                                   "STRICT_BLOCKED_BARRIER_OBSERVED" if strict else
+                                  "FENCED_RESOLVER_OBSERVED_RUNTIME_PROOF_REQUIRED" if fenced else
                                   "RESOLUTION_BARRIER_NOT_STRICT", *LIMITS).to_dict())
 
 

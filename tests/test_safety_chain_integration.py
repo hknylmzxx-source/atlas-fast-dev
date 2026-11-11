@@ -353,9 +353,10 @@ class EndToEndSafetyChainTests(unittest.TestCase):
             s.gate,s.inputs,s.venue,{"entry":{"symbol":SYM}},SCOPE,"79")
         self.assertEqual(settle["state"],"CLOSED")
         self.assertFalse(s.gate.open)
-        # Even fully settled and FLAT cannot authorize an unfenced marker.
+        # G55/Faz 3: bu fikstürün WAL dosyaları owner-private (0600/uid) değil;
+        # ortak fence'li resolver güvenilmez kayıtla işaret yazmaz (fail-closed).
         with self.assertRaisesRegex(
-                Blocked,"WAL_RESOLUTION_MARKER_DISABLED_SHARED_FENCE_UNPROVEN"):
+                Blocked,"WAL_RESOLUTION_MARKER_NOT_WRITTEN"):
             s.ns["mark_scope_resolved"](SCOPE,"OFFLINE_TEST_SIGNED_FLAT")
         self.assertFalse((s.wal/("resolved_"+SCOPE+".json")).exists())
         report,_=s.gate_report()

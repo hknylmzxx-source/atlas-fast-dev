@@ -140,6 +140,10 @@ def fp(bundle):
     return hashlib.sha256(json.dumps(bundle,sort_keys=True,
         separators=(",",":"),allow_nan=False).encode()).hexdigest()
 
+# G55/Faz 3: WAL record names this process itself persisted, per scope. The
+# resolver requires the on-disk scope set to equal this set (late write = refuse).
+_WAL_SCOPE_NAMES={}
+
 def journal(role,identity,body):
     # G54: lease -> WAL fence for one_write. Release the WAL fence BEFORE
     # post_once/delete_once can acquire a lease (emergency / normal DELETE).
@@ -147,8 +151,9 @@ def journal(role,identity,body):
         from wal_owner_write_adapter_candidate import append_order_journal
         if LOG.is_symlink():raise Blocked("JOURNAL_SYMLINK")
         LOG.mkdir(mode=0o700,exist_ok=True)
-        append_order_journal(LOG,role=role,identity=identity,detail=body,
-                             scope=body["scope"],expected_uid=501)
+        name=append_order_journal(LOG,role=role,identity=identity,detail=body,
+                                  scope=body["scope"],expected_uid=501)
+        globals().setdefault("_WAL_SCOPE_NAMES",{}).setdefault(body["scope"],set()).add(name)
     except Exception as error:
         code=str(error)
         if code=="WAL_DUPLICATE_NO_WRITE":
@@ -231,14 +236,25 @@ def startup_reconcile():
     if open_scopes-resolved:
         raise Blocked("UNRESOLVED_WAL_SCOPE_OWNER_REVIEW_REQUIRED")
 
-def mark_scope_resolved(scope,outcome):
-    """Fail closed on ALL marker paths until every WAL writer shares a fence.
+def mark_scope_resolved(scope,outcome,verified_names=None):
+    """G55/Faz 3: write resolved_<scope> ONLY under the shared WAL writer fence.
 
-    A signed FLAT snapshot or settled policy ledger alone cannot eliminate
-    concurrent ENTRY/STOP/TP/incident WAL writes. Keep unresolved scopes
-    blocked rather than create an unsafe marker. Offline development only.
+    G54 routes every owner WAL writer (ENTRY/STOP/TP/incident/POLICY_RESERVE)
+    through the same fence, and compliant writers refuse an already-resolved
+    scope. The resolver re-reads the whole WAL under that fence and refuses on
+    any incident/emergency latch, unreadable row, missing scope or busy fence.
+    Any failure keeps the scope unresolved (fail closed: next entry blocked).
+    Callers invoke this only after signed FLAT + owned exits cleared.
+    verified_names: the scope's WAL names the caller verified (restart path);
+    default is the set this process itself wrote. On-disk set must be equal.
     """
-    raise Blocked("WAL_RESOLUTION_MARKER_DISABLED_SHARED_FENCE_UNPROVEN")
+    try:
+        from wal_owner_write_adapter_candidate import resolve_settled_scope
+        names=verified_names if verified_names is not None else globals().setdefault("_WAL_SCOPE_NAMES",{}).get(scope)
+        resolve_settled_scope(LOG,scope=scope,outcome=outcome,
+                              expected_names=frozenset(names or ()),expected_uid=501)
+    except Exception as error:
+        raise Blocked("WAL_RESOLUTION_MARKER_NOT_WRITTEN:"+str(error)[:120]) from None
 
 def verify_sdk_versions(version):
     """007: exact pins for the USD-M SDK and its binance-common dependency."""
@@ -1130,8 +1146,9 @@ def write_policy_reserve_record(scope,symbol,client_id):
         from wal_owner_write_adapter_candidate import append_reservation
         if LOG.is_symlink():raise Blocked("JOURNAL_SYMLINK")
         LOG.mkdir(mode=0o700,exist_ok=True)
-        append_reservation(LOG,scope=scope,symbol=symbol,client_id=client_id,
-                           expected_uid=501)
+        name=append_reservation(LOG,scope=scope,symbol=symbol,client_id=client_id,
+                                expected_uid=501)
+        globals().setdefault("_WAL_SCOPE_NAMES",{}).setdefault(scope,set()).add(name)
     except Exception as error:
         code=str(error)
         if code=="WAL_DUPLICATE_NO_WRITE":code="POLICY_RESERVE_RECORD_EXISTS"
@@ -1245,7 +1262,11 @@ def _restart_one(gate,inputs,venue,records,pending):
             return "KEPT_ZERO_ENTRY_WAL_PROOF_INCOMPLETE"
         return "SETTLED"
     if not (LOG/("resolved_"+scope+".json")).exists():
-        mark_scope_resolved(scope,"RESTART_SETTLED_SIGNED_FLAT")
+        mark_scope_resolved(scope,"RESTART_SETTLED_SIGNED_FLAT",frozenset(
+            name for name,row in records.items()
+            if type(row) is dict and not name.startswith("resolved_")
+            and ((row.get("detail") if type(row.get("detail")) is dict else {}).get("scope")==scope
+                 or row.get("scope")==scope)))
     return "SETTLED"
 
 def restart_reconcile():

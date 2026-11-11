@@ -33,9 +33,9 @@ MAX_EVENTS = 2000
 SOURCE_REFERENCE = {
     "base": "1d9e3aa0131a664b1ddb8f7100ada3f6e7719b5b",
     "source": "owner_single_execution.py",
-    "actual_order": 561,
-    "checked": 568,
-    "cleanup_owned_exits": 748,
+    "actual_order": 577,
+    "checked": 584,
+    "cleanup_owned_exits": 764,
     "callgraph": [
         "run_once -> one_write -> checked -> actual_order",
         "actual_order: STOP -> query_algo_order(clientAlgoId)",

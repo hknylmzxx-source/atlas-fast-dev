@@ -9,7 +9,8 @@ import math
 import time
 
 from wal_writer_fence_candidate import (
-    WalFenceBlocked, append_record, resolve_reserve_only, _safe,
+    WalFenceBlocked, append_record, resolve_reserve_only, resolve_settled_scope as _resolve_settled,
+    _safe,
 )
 
 _ORDER_ROLES=frozenset(("ENTRY","STOP","TP1","TP2","EMERGENCY",
@@ -117,3 +118,14 @@ def resolve_zero_reservation_offline(directory, *, scope,symbol,client_id,
         directory,scope=scope,symbol=symbol,client_id=client_id,
         proof=proof,expected_uid=expected_uid,
     )
+
+
+def resolve_settled_scope(directory, *, scope, outcome, expected_names, expected_uid=None):
+    """G55/Faz 3: owner kapanış işareti; şema doğrulaması ve ortak fence altında.
+
+    Yalnız owner'ın imzalı FLAT + çıkışlar temizlendi doğrulamasından sonra çağrılır.
+    Herhangi bir belirsizlikte WalFenceBlocked fırlatır (işaret yazılmaz).
+    """
+    return _resolve_settled(directory, scope=scope, outcome=outcome, proof=True,
+                            expected_names=expected_names, expected_uid=expected_uid,
+                            validate_row=_validate_owner_row)

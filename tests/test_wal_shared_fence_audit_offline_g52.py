@@ -33,9 +33,29 @@ class StaticAuditTests(unittest.TestCase):
         cls.source = (ROOT / "owner_single_execution.py").read_text(encoding="utf-8")
         cls.report = g52.audit_source(cls.source)
 
-    def test_actual_marker_is_one_unconditional_blocked_raise(self):
-        self.assertTrue(self.report["marker_strict_block_observed"])
+    def test_actual_marker_is_fenced_resolver_still_unproven(self):
+        # G55/Faz 3: işaret artık ortak fence'li resolver'a delege; statik denetim
+        # bunu kanıt saymaz, karar UNPROVEN kalır (runtime kanıtı gerekli).
+        self.assertFalse(self.report["marker_strict_block_observed"])
+        self.assertTrue(self.report["marker_fenced_resolver_observed"])
         self.assertEqual(self.report["decision"]["status"], "UNPROVEN")
+        self.assertIn("FENCED_RESOLVER_OBSERVED_RUNTIME_PROOF_REQUIRED",
+                      self.report["decision"]["reasons"])
+
+    def test_fenced_resolver_pattern_rejects_direct_write_or_swallowed_error(self):
+        good = ("def mark_scope_resolved(s,o):\n    try:\n        resolve_settled_scope(L,scope=s)\n"
+                "    except Exception as e:\n        raise Blocked('X')\n")
+        self.assertTrue(g52.audit_source(good)["marker_fenced_resolver_observed"])
+        for bad in (
+            good.replace("raise Blocked('X')", "pass"),
+            good.replace("resolve_settled_scope(L,scope=s)", "os.open(p)"),
+            good.replace("resolve_settled_scope(L,scope=s)",
+                         "resolve_settled_scope(L,scope=s);os.write(1,b'')"),
+        ):
+            with self.subTest(bad=bad):
+                report = g52.audit_source(bad)
+                self.assertFalse(report["marker_fenced_resolver_observed"])
+                self.assertEqual(report["decision"]["status"], "FAIL")
 
     def test_zero_entry_terminal_block_remains_observed(self):
         self.assertTrue(self.report["zero_entry_terminal_block_observed"])

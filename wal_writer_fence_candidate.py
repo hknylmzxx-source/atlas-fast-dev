@@ -254,3 +254,50 @@ def resolve_reserve_only(directory,*,scope,symbol,client_id,proof,expected_uid=N
             "kind":"WAL_WRITER_FENCE_CANDIDATE",
         })
         return target
+
+def resolve_settled_scope(directory,*,scope,outcome,proof,expected_names,
+                          expected_uid=None,validate_row=None):
+    """G55/Faz 3: başarılı işlem sonrası kapanış işaretini ORTAK fence altında yaz.
+
+    Çağıran (owner) yalnız imzalı FLAT + kendi çıkış emirleri temizlendi + policy settle
+    sonrasında proof=True verir. Fence altında tüm WAL yeniden okunur; şu durumlarda
+    işaret YAZILMAZ (fail-closed, sonraki işlem bloklu kalır):
+      - fence meşgul/güvenilmez, dizin değişti, kayıt okunamaz/şema bozuk
+      - herhangi bir incident_ / emergency_latch_ kaydı var
+      - scope zaten çözülmüş veya scope'a ait hiçbir WAL kaydı yok
+      - scope'un diskteki WAL kayıt adları, çağıranın doğrulama anındaki kümesiyle
+        (expected_names) birebir aynı değil (doğrulamadan sonra geç yazım = yarış)
+    Uyumlu yazıcılar (append_record) aynı fence altında çözülmüş scope'a yazmayı reddeder;
+    böylece işaret ile eşzamanlı ENTRY/STOP/TP/incident yazımı yarışamaz.
+    """
+    scope=_safe(scope,"SCOPE")
+    outcome=_safe(outcome,"OUTCOME")
+    if proof is not True:
+        raise WalFenceBlocked("SIGNED_FLAT_PROOF_NOT_CONFIRMED")
+    if (type(expected_names) is not frozenset or not expected_names
+            or any(type(n) is not str for n in expected_names)):
+        raise WalFenceBlocked("VERIFIED_WAL_SET_MISSING")
+    target="resolved_"+scope+".json"
+    with writer_fence(directory,expected_uid=expected_uid) as fd:
+        try:os.stat(target,dir_fd=fd,follow_symlinks=False)
+        except FileNotFoundError:pass
+        else:raise WalFenceBlocked("ALREADY_RESOLVED")
+        rows=_read_all(fd,validate_row)
+        scope_names=set()
+        for name,item in rows.items():
+            if name.startswith(("incident_","emergency_latch_")):
+                raise WalFenceBlocked("INCIDENT_PRESENT_NO_RESOLVE")
+            if name.startswith("resolved_"):
+                continue
+            extra=item.get("detail")
+            if ((type(extra) is dict and extra.get("scope")==scope)
+                    or item.get("scope")==scope):
+                scope_names.add(name)
+        if not scope_names:
+            raise WalFenceBlocked("SCOPE_HAS_NO_WAL")
+        if scope_names!=set(expected_names):
+            raise WalFenceBlocked("SCOPE_WAL_CHANGED_SINCE_VERIFICATION")
+        _same_directory(directory,fd,expected_uid)
+        _write_once(fd,target,{"scope":scope,"outcome":outcome,
+                               "kind":"OWNER_SETTLED_UNDER_SHARED_FENCE"})
+        return target

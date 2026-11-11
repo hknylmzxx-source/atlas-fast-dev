@@ -32,7 +32,8 @@ class WalMarkerAuditTests(unittest.TestCase):
         self.assertFalse(self.report["live_release_allowed"])
         self.assertEqual(self.report["assessment"],
                          "NO_GO_REVIEW_UNPROVEN_WRITER_ATOMICITY")
-    def test_all_three_callers_reach_the_same_fail_closed_marker(self):
+    def test_all_three_callers_reach_the_same_fenced_marker(self):
+        # G55/Faz 3: işaret doğrudan dosya yazmaz; yalnız ortak fence'li resolver'a delege eder.
         tree=ast.parse(SOURCE.read_text())
         funcs={n.name:n for n in tree.body if isinstance(n,ast.FunctionDef)}
         marker=funcs["mark_scope_resolved"]
@@ -40,22 +41,31 @@ class WalMarkerAuditTests(unittest.TestCase):
                              and isinstance(n.func,ast.Attribute)
                              and n.func.attr in ("open","write","fsync")
                              for n in ast.walk(marker)))
-        self.assertTrue(any(isinstance(n,ast.Constant)
-                            and n.value=="WAL_RESOLUTION_MARKER_DISABLED_SHARED_FENCE_UNPROVEN"
-                            for n in ast.walk(marker)))
+        self.assertEqual(sum(isinstance(n,ast.Call) and isinstance(n.func,ast.Name)
+                             and n.func.id=="resolve_settled_scope"
+                             for n in ast.walk(marker)),1)
         self.assertEqual(set(self.report["marker_callers"]),{
             "risk_ledger_entry_gate","_restart_one","run_once"})
 
     def test_marker_fail_closed_in_isolated_ast_without_filesystem(self):
+        # Resolver modülü yoksa / hata verirse işaret Blocked fırlatır (fail-closed).
         tree=ast.parse(SOURCE.read_text())
         marker=next(n for n in tree.body if isinstance(n,ast.FunctionDef)
                     and n.name=="mark_scope_resolved")
-        scope={}
         class Blocked(Exception):
             pass
+        import builtins
+        real_import=builtins.__import__
+        def no_resolver(name,*a,**k):
+            if name=="wal_owner_write_adapter_candidate":
+                raise ImportError("SYNTHETIC_MISSING")
+            return real_import(name,*a,**k)
+        scope={}
         exec(compile(ast.Module(body=[marker],type_ignores=[]),
-                     "<offline-marker-source>","exec"),{"Blocked":Blocked},scope)
-        with self.assertRaisesRegex(Blocked,"SHARED_FENCE_UNPROVEN"):
+                     "<offline-marker-source>","exec"),
+             {"Blocked":Blocked,"LOG":Path("/nonexistent-g55"),
+              "__builtins__":dict(vars(builtins),__import__=no_resolver)},scope)
+        with self.assertRaisesRegex(Blocked,"WAL_RESOLUTION_MARKER_NOT_WRITTEN"):
             scope["mark_scope_resolved"]("TEST_SCOPE","TEST_SETTLED")
 
     def test_read_only_audit_supports_synthetic_source(self):
