@@ -141,22 +141,19 @@ def fp(bundle):
         separators=(",",":"),allow_nan=False).encode()).hexdigest()
 
 def journal(role,identity,body):
-    if LOG.is_symlink():raise Blocked("JOURNAL_SYMLINK")
-    LOG.mkdir(mode=0o700,exist_ok=True)
-    st=LOG.stat()
-    if st.st_uid!=501 or st.st_mode & 0o077:
-        raise Blocked("JOURNAL_PERMISSIONS")
-    name=LOG/(role+"_"+identity+".json")
-    raw=(json.dumps({"role":role,"intent":identity,"at":time.time(),
-                     "state":"WRITE_OUTCOME_UNKNOWN_NO_RETRY",
-                     "detail":body},sort_keys=True)+"\n").encode()
-    try:fd=os.open(name,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
-    except FileExistsError:raise Blocked("DUPLICATE_WAL_ATTEMPT_NO_RESEND") from None
-    with os.fdopen(fd,"wb") as out:
-        out.write(raw);out.flush();os.fsync(out.fileno())
-    dirfd=os.open(LOG,os.O_RDONLY)
-    try:os.fsync(dirfd)
-    finally:os.close(dirfd)
+    # G54: lease -> WAL fence for one_write. Release the WAL fence BEFORE
+    # post_once/delete_once can acquire a lease (emergency / normal DELETE).
+    try:
+        from wal_owner_write_adapter_candidate import append_order_journal
+        if LOG.is_symlink():raise Blocked("JOURNAL_SYMLINK")
+        LOG.mkdir(mode=0o700,exist_ok=True)
+        append_order_journal(LOG,role=role,identity=identity,detail=body,
+                             scope=body["scope"],expected_uid=501)
+    except Exception as error:
+        code=str(error)
+        if code=="WAL_DUPLICATE_NO_WRITE":
+            code="DUPLICATE_WAL_ATTEMPT_NO_RESEND"
+        raise Blocked("OWNER_WAL_JOURNAL_FAILED:"+code) from None
 
 def global_one_trade_lock():
     """Never allow two owner processes to preflight a flat account together."""
@@ -193,14 +190,14 @@ def emergency_intervention_lock():
         raise Blocked("EMERGENCY_INTERVENTION_ALREADY_RUNNING") from None
 
 def emergency_note(identity,reason):
-    path=LOG/("incident_"+identity+".json")
-    raw=json.dumps({"scope":identity,"at":time.time(),"reason":reason,
-        "new_entry_permitted":False,"retry_permitted":False},
-        sort_keys=True).encode()+b"\n"
-    try:fd=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
-    except FileExistsError:return
-    with os.fdopen(fd,"wb") as out:
-        out.write(raw);out.flush();os.fsync(out.fileno())
+    try:
+        from wal_owner_write_adapter_candidate import append_incident
+        append_incident(LOG,scope=identity,reason=reason,expected_uid=501,
+                        existing_ok=True)
+    except Exception as error:
+        # Do not classify WAL busy as a retryable mutation lease refusal.
+        # run_once must still supervise exposure when an incident cannot persist.
+        raise Blocked("OWNER_WAL_INCIDENT_FAILED:"+str(error)) from None
 
 def startup_reconcile():
     """B2: refuse any new trade while a previous trade is unresolved.
@@ -1129,23 +1126,16 @@ def write_policy_reserve_record(scope,symbol,client_id):
     """POLICY-RESTART-002: durable link scope -> symbol + entry clientOrderId,
     written BEFORE the ledger reservation (O_EXCL, fsync). startup_reconcile
     treats it like any WAL scope (blocks until resolved_<scope>.json)."""
-    if LOG.is_symlink():raise Blocked("JOURNAL_SYMLINK")
-    LOG.mkdir(mode=0o700,exist_ok=True)
-    st=LOG.stat()
-    if st.st_uid!=501 or st.st_mode & 0o077:
-        raise Blocked("JOURNAL_PERMISSIONS")
-    raw=(json.dumps({"role":"POLICY_RESERVE","intent":scope,"at":time.time(),
-                     "state":"RESERVATION_PENDING",
-                     "detail":{"scope":scope,"symbol":symbol,"client_id":client_id}},
-                    sort_keys=True)+"\n").encode()
-    try:fd=os.open(LOG/("POLICY_RESERVE_"+scope+".json"),
-                   os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
-    except FileExistsError:raise Blocked("POLICY_RESERVE_RECORD_EXISTS") from None
-    with os.fdopen(fd,"wb") as out:
-        out.write(raw);out.flush();os.fsync(out.fileno())
-    dirfd=os.open(LOG,os.O_RDONLY)
-    try:os.fsync(dirfd)
-    finally:os.close(dirfd)
+    try:
+        from wal_owner_write_adapter_candidate import append_reservation
+        if LOG.is_symlink():raise Blocked("JOURNAL_SYMLINK")
+        LOG.mkdir(mode=0o700,exist_ok=True)
+        append_reservation(LOG,scope=scope,symbol=symbol,client_id=client_id,
+                           expected_uid=501)
+    except Exception as error:
+        code=str(error)
+        if code=="WAL_DUPLICATE_NO_WRITE":code="POLICY_RESERVE_RECORD_EXISTS"
+        raise Blocked("OWNER_WAL_RESERVE_FAILED:"+code) from None
 
 def risk_ledger_entry_gate(phase,bundle,market,envelope,scope,gate=None):
     """F3: the real reservation (ledger OPENED) via the contract, only after
@@ -1624,6 +1614,14 @@ def run_once(bundle):
             return "FLAT_SETTLED_COVERAGE_NOT_VERIFIED_OWNER_REVIEW"
         mark_scope_resolved(scope,"FLAT_AND_OWNED_EXITS_VERIFIED_CLEARED")
         return "FLAT_AND_OWNED_EXITS_VERIFIED_CLEARED"
+    except Blocked as error:
+        if str(error).startswith("OWNER_WAL_INCIDENT_FAILED:"):
+            # G54: a contended/broken incident append must not strand signed
+            # STOP coverage. Use existing emergency/manual-close supervision;
+            # never retry a POST, bypass WAL, resolve, or claim protection.
+            flatten_or_supervise(venue,guard,bundle,scope,symbol,
+                                "INCIDENT_WAL_PERSISTENCE_FAILED",inputs)
+        raise
     finally:
         venue.close()
 
