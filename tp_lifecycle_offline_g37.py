@@ -44,7 +44,17 @@ REASONS = frozenset((
     "UNTRUSTED_MOCK_RECEIPT", "BINDING_MISMATCH", "INVALID_OBSERVATION",
     "STALE_OR_FUTURE", "DUPLICATE_RECEIPT", "REORDERED_OBSERVATION",
     "CONFLICTING_OBSERVATION", "TARGET_QUARANTINED",
+    # G55/Faz 3: pozisyon bağlamlı TP terminal gözlemleri
+    "MOCK_READ_ACCEPTED_FLAT_TERMINAL", "MOCK_READ_ACCEPTED_EXPOSED_PROTECTED",
+    "MOCK_READ_ACCEPTED_EXPOSED_UNPROTECTED",
 ))
+# G55: bağlam nedeni -> alarm. MOCK_READ_ACCEPTED (bağlamsız) eski davranış: terminal = OWNER_ALARM.
+_CONTEXT_REASONS = {
+    "MOCK_READ_ACCEPTED_FLAT_TERMINAL": "NONE",
+    "MOCK_READ_ACCEPTED_EXPOSED_PROTECTED": "NONE",
+    "MOCK_READ_ACCEPTED_EXPOSED_UNPROTECTED": "OWNER_ALARM",
+}
+_OBSERVATION_REASONS = frozenset(("MOCK_READ_ACCEPTED", *_CONTEXT_REASONS))
 ZERO_HASH = "0" * 64
 
 
@@ -361,7 +371,11 @@ def _read_problem(view, observation, at_ms, max_age_ms):
     return None
 
 
-def _alarm(status):
+def _alarm(status, reason="MOCK_READ_ACCEPTED"):
+    if reason in _CONTEXT_REASONS:
+        if status not in {"EXPIRED", "CANCELED", "REJECTED"}:
+            raise LifecycleError("CONTEXT_REASON_TERMINAL_ONLY")
+        return _CONTEXT_REASONS[reason]
     if status == "PARTIAL":
         return "RECONCILE"
     if status in {"EXPIRED", "CANCELED", "REJECTED"}:
@@ -476,8 +490,10 @@ class TPLifecycleOffline:
                 valid = (not view.quarantined and event.receipt_id not in self._receipts
                          and re.fullmatch(r"[0-9a-f]{32}", event.receipt_id) is not None
                          and _read_problem(view, observation, event.at_ms, self._max_age) is None
-                         and event.reason == "MOCK_READ_ACCEPTED"
-                         and event.alarm == _alarm(event.state)
+                         and event.reason in _OBSERVATION_REASONS
+                         and (event.reason == "MOCK_READ_ACCEPTED"
+                              or event.state in {"EXPIRED", "CANCELED", "REJECTED"})
+                         and event.alarm == _alarm(event.state, event.reason)
                          and event.provenance == "MOCK_IDENTITY_ONLY")
                 if valid:
                     self._views[role] = replace(view, state=event.state, filled_qty=event.filled_qty,
@@ -495,6 +511,7 @@ class TPLifecycleOffline:
                     self._views[role] = replace(view, state=event.state)
             elif event.kind == "FAIL_CLOSED":
                 valid = (event.state == "OWNER_REVIEW_NO_RETRY" and event.alarm == "OWNER_REVIEW"
+                         and event.reason not in _OBSERVATION_REASONS
                          and event.reason not in {"SESSION_START", "RESTART_DISK_REPLAY",
                                                  "SYNTHETIC_POST_INTENT", "MOCK_READ_ACCEPTED",
                                                  "AMBIGUOUS_POST", "READ_TIMEOUT"}
@@ -563,7 +580,9 @@ class TPLifecycleOffline:
                           reason=reason, alarm="OWNER_REVIEW")
 
     @_serialized
-    def observe(self, role, receipt):
+    def observe(self, role, receipt, *, exposure=None):
+        """exposure: G55 ExposureContext (opsiyonel). Yalnız EXPIRED/CANCELED/REJECTED
+        için kullanılır; yoksa/bozuksa eski güvenli davranış (OWNER_ALARM) korunur."""
         view = self._target(role)
         if view.quarantined:
             return self._reject(role, "TARGET_QUARANTINED")
@@ -581,12 +600,22 @@ class TPLifecycleOffline:
         if problem:
             return self._reject(role, problem)
         observation = receipt.observation
+        reason = "MOCK_READ_ACCEPTED"
+        if exposure is not None and observation.status in {"EXPIRED", "CANCELED", "REJECTED"}:
+            from tp_exposure_guard_offline_g55 import (
+                classify_tp_terminal, CTX_FLAT_EXPIRY, CTX_EXPOSED_PROTECTED)
+            context = classify_tp_terminal(observation.status, exposure)
+            reason = ("MOCK_READ_ACCEPTED_FLAT_TERMINAL" if context == CTX_FLAT_EXPIRY
+                      else "MOCK_READ_ACCEPTED_EXPOSED_PROTECTED"
+                      if context == CTX_EXPOSED_PROTECTED
+                      else "MOCK_READ_ACCEPTED_EXPOSED_UNPROTECTED")
         return self._emit(kind="OBSERVATION", at_ms=at_ms, binding=view.binding,
                           state=observation.status, filled_qty=observation.filled_qty,
                           observed_at_ms=observation.observed_at_ms,
                           read_sequence=observation.read_sequence,
-                          receipt_id=receipt.receipt_id, reason="MOCK_READ_ACCEPTED",
-                          alarm=_alarm(observation.status), provenance="MOCK_IDENTITY_ONLY")
+                          receipt_id=receipt.receipt_id, reason=reason,
+                          alarm=_alarm(observation.status, reason),
+                          provenance="MOCK_IDENTITY_ONLY")
 
 
 def synthetic_demo(directory):
