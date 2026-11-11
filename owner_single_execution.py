@@ -80,6 +80,7 @@ POST_PATHS=frozenset(("/fapi/v1/order","/fapi/v1/algoOrder"))
 DELETE_PATHS=POST_PATHS
 MAX_MARGIN=Decimal("200")     # sahip 29.10: atlas_limits.json      # 047 live pilot (owner 23.10.2026): 3x isolated, margin <= 95 USDT
 MAX_RISK=Decimal("0.75")      # 047: worst-case loss incl. slippage and fees <= 2.70 USDT
+LOSS_LOCK_USDT=Decimal("1.00")  # B3 sahip 07.11.2026: giris kilidi esigi (MAX_RISK degismedi)
 MAX_NOTIONAL=Decimal("600")   # 047: = MAX_MARGIN x MAX_LEVERAGE
 MAX_LEVERAGE=Decimal("3")     # 047
 ENTRY_RESOLVE_POLLS=15
@@ -569,6 +570,8 @@ def actual_order(venue,role,wire):
 def checked(venue,role,wire):
     """A separate signed Binance GET is the only accepted receipt."""
     r=actual_order(venue,role,wire)
+    try:_telemetry_observe(role,wire,r,"SIGNED_READBACK")   # G56: append-only, never blocks
+    except Exception:pass
     if type(r) is not dict:
         raise Blocked("SIGNED_RECEIPT_NOT_OBJECT")
     if any(r.get(k)!=wire.get(k) for k in ("symbol","side","positionSide")):
@@ -957,7 +960,12 @@ def policy_settle_after_flat(gate,inputs,venue,bundle,scope,entry_filled_qty):
                 last=str(e)[:120] or type(e).__name__
                 continue
             if type(result) is dict and result.get("risk_exceeded") is True:
-                emergency_note(scope,"REALIZED_LOSS_ABOVE_PLANNED_RISK_OWNER_REVIEW")
+                # B3 (sahip 07.11.2026, secenek A): planlanan risk asimi defterde kayitli kalir;
+                # giris kilidi yalniz gerceklesen kayip LOSS_LOCK_USDT'yi asarsa (ya da okunamazsa) acilir.
+                try:loss=-Decimal(str(result.get("realized_pnl_usdt")))
+                except Exception:loss=None
+                if loss is None or not loss.is_finite() or loss>LOSS_LOCK_USDT:
+                    emergency_note(scope,"REALIZED_LOSS_ABOVE_LOCK_THRESHOLD_OWNER_REVIEW")
             return result
     emergency_note(scope,"POLICY_SETTLE_PENDING_OPENED_KEPT:"+last)
     return None
@@ -1161,6 +1169,61 @@ def restart_protection_gate(guard):
             rep.get("wal"),",".join(states)[:80],len(rep.get("alarm_failures") or ())))
     return rep
 
+_TELEMETRY_ARMED=False   # G56: set only by main() (real owner run); imports/tests never write
+
+def _telemetry():
+    """G56: owner-private append-only telemetry (separate from the WAL). None on any error
+    and None unless main() armed it, so test harnesses never touch the owner directory."""
+    if _TELEMETRY_ARMED is not True:
+        return None
+    try:
+        import fast_telemetry_g56
+        return fast_telemetry_g56.default(PRIVATE)
+    except Exception:
+        return None
+
+def _telemetry_observe(role,wire,receipt,phase):
+    """G56: record a signed order receipt (status/algoStatus, ids, type, reduceOnly).
+    Never raises; never changes the receipt or the checks that follow."""
+    try:
+        t=_telemetry()
+        if t is None:return
+        cid=wire.get("clientAlgoId") if role=="STOP" else wire.get("newClientOrderId")
+        if type(receipt) is dict:
+            t.record_order_observation(role,receipt,phase=phase,client_id=cid)
+        else:
+            t.record_order_error(role,cid,code="RECEIPT_NOT_OBJECT",msg=type(receipt).__name__)
+    except Exception:
+        pass
+
+def _tp_exposure_sleep(guard,bundle):
+    """G56: supervision sleep that first runs the read-only TP-exposure audit
+    (<= every 30 s, signed GETs via the guard venue). Alarm channel = guard[1]
+    (same owner alarm as MANUAL_CLOSE_REQUIRED). Sends/cancels nothing; never raises;
+    if the audit cannot be built, raises an alarm once and falls back to time.sleep."""
+    try:
+        import stop_ambiguity_guard as guard_mod
+        import tp_exposure_monitor_g56 as tpm
+        gvenue=guard[2]
+        symbol=bundle["entry"]["symbol"]
+        stop_id=bundle["stop"]["clientAlgoId"]
+        tp_ids=[t["newClientOrderId"] for t in bundle["take_profits"]]
+        own={stop_id:"STOP"}
+        for i,tid in enumerate(tp_ids):own[tid]="TP%d"%(i+1)
+        mon=tpm.TpExposureMonitor(alarm=guard[1],symbol=symbol,own_ids=own,telemetry=_telemetry())
+        def read():
+            return guard_mod.gather(gvenue,symbol=symbol,stop_id=stop_id,tp_ids=tp_ids)
+    except Exception as e:
+        try:guard[1]("TP_EXPOSURE_AUDIT_UNAVAILABLE:%s"%type(e).__name__)
+        except Exception:pass
+        return time.sleep
+    def sleep(seconds):
+        try:mon.maybe_audit(read)
+        except Exception:pass
+        time.sleep(seconds)
+    sleep.monitor=mon
+    return sleep
+
 def make_coverage_monitor(guard,bundle,scope,observer_status,inputs=None):
     """B6-019: CoverageMonitor over the R2-DISABLED guard venue with the
     CONSERVATIVE CANDIDATE thresholds (not owner-approved). 037: run_once
@@ -1205,7 +1268,9 @@ def supervise_until_flat(guard,bundle,scope,inputs=None):
     except Exception:
         observer=lambda:{"status":"DEAD","generated_at_ms":None,"reason":"OBSERVER_SOURCE_UNAVAILABLE"}
     monitor=make_coverage_monitor(guard,bundle,scope,observer,inputs)
-    return rc_mod.supervise(monitor,sleep=time.sleep)
+    try:sleep=_tp_exposure_sleep(guard,bundle)   # G56: read-only TP audit; never blocks
+    except Exception:sleep=time.sleep
+    return rc_mod.supervise(monitor,sleep=sleep)
 
 def flatten_or_supervise(venue,guard,bundle,scope,symbol,reason,inputs=None):
     """037 (Issue #4): emergency_flatten is fenced in production (R2 disabled ->
@@ -1437,6 +1502,8 @@ def main():
         print("OWNER_PRIVATE_INSTALL_AND_EXACT_BUNDLE_ARGUMENT_REQUIRED")
         return 2
     owner_only()
+    global _TELEMETRY_ARMED
+    _TELEMETRY_ARMED=True   # G56: append-only telemetry for this real owner run only
     target=Path(sys.argv[2])
     if target.is_symlink() or target.parent!=PRIVATE or not target.is_file():
         raise Blocked("EXACT_OWNER_PRIVATE_BUNDLE_REQUIRED")
