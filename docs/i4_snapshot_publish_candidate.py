@@ -12,8 +12,47 @@ GROUP = "FAST_SIGNAL_LIVE_PILOT"
 NAME = "fast_signal_live_dry_run_events.jsonl"
 
 
+
+def fsync_dir(path):
+    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def publish_report(report, result):
+    """Publish only a fully written report, without replacing an existing report."""
+    fd, name = tempfile.mkstemp(prefix=".i4-report-", dir=report.parent)
+    staged = Path(name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(result, f, ensure_ascii=False, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.link(staged, report)
+        fsync_dir(report.parent)
+    finally:
+        staged.unlink(missing_ok=True)
+
+
+def publish_pair(archive, output, report, result, checkpoint=None):
+    """Report first. The final archive name is the commit marker."""
+    with archive.open("rb") as f:
+        os.fsync(f.fileno())
+    if checkpoint:
+        checkpoint("before_report")
+    publish_report(report, result)
+    if checkpoint:
+        checkpoint("after_report")
+    os.link(archive, output)
+    fsync_dir(output.parent)
+    if checkpoint:
+        checkpoint("after_archive")
+
+
 def build_verified(v4, root, output, report, *, thresholds=None, required=(),
-                   owner_private=(), after_capture=None, gate=verify_members):
+                   owner_private=(), after_capture=None, gate=verify_members, checkpoint=None):
     root, output, report = (Path(p).resolve() for p in (root, output, report))
     if any(p == root or root in p.parents for p in (output, report)):
         raise ValueError("output and report must be outside source root")
@@ -21,7 +60,6 @@ def build_verified(v4, root, output, report, *, thresholds=None, required=(),
         raise ValueError("archive and report must differ")
     if output.exists() or report.exists():
         raise FileExistsError("destination already exists")
-    published = False
     result = {"status": "FAIL", "fatal": [], "final_archive": None, "archive_sha256": None}
     # stage outside the source; unpublished candidate has a name not matched by cloud scan.
     with tempfile.TemporaryDirectory(prefix=".i4-work-", dir=output.parent) as temp:
@@ -60,16 +98,14 @@ def build_verified(v4, root, output, report, *, thresholds=None, required=(),
                 sha = hashlib.file_digest(f, "sha256").hexdigest()
             if sha != raw["archive_sha256"]:
                 raise ValueError("candidate archive SHA changed")
-            os.link(archive, output)
-            published = True
-            result.update(status=raw["status"], final_archive=str(output), archive_sha256=sha)
+            ready = dict(result, status=raw["status"], final_archive=str(output), archive_sha256=sha,
+                         publication_rule="final archive name must exist and match archive_sha256")
         except (OSError, ValueError, tarfile.TarError) as exc:
             result["fatal"] = [*result["fatal"], f"I4_PREPUBLICATION: {exc}"]
-        try:
-            with report.open("x", encoding="utf-8") as f:
-                json.dump(result, f, ensure_ascii=False, indent=2)
-        except OSError:
-            if published:
-                output.unlink()
-            raise
-    return result
+            publish_report(report, result)
+            return result
+        # After a report is committed, never remove or overwrite an archive
+        # from this path. An interruption may leave an orphan report, not an
+        # unverified final archive. Existing names require a new run identity.
+        publish_pair(archive, output, report, ready, checkpoint)
+        return ready
