@@ -30,10 +30,21 @@ def freeze(active, dest, after_capture=None):
         with open_regular(lock_path) as lock:
             fcntl.flock(lock, fcntl.LOCK_SH)
             paths = sorted(p for p in active.parent.iterdir() if pattern.fullmatch(p.name))
-            parts = []
-            for p in (*paths, active):
-                f = stack.enter_context(open_regular(p))
-                parts.append((p.name, f, os.fstat(f.fileno())))
+            active_file = stack.enter_context(open_regular(active))
+            active_stat = os.fstat(active_file.fileno())
+            active_key = (active_stat.st_dev, active_stat.st_ino)
+            parts, seen = [], set()
+            for p in paths:
+                with open_regular(p) as f:
+                    st = os.fstat(f.fileno())
+                    key = (st.st_dev, st.st_ino)
+                    if key in seen:
+                        raise ValueError("duplicate archive inode")
+                    seen.add(key)
+                    if key != active_key:
+                        pinned = stack.enter_context(os.fdopen(os.dup(f.fileno()), "rb"))
+                        parts.append((p.name, pinned, st))
+            parts.append((active.name, active_file, active_stat))
         if after_capture:
             after_capture()
         dest.mkdir()
