@@ -3,6 +3,8 @@ import hashlib
 import json
 import os
 import signal
+import stat
+from decimal import Decimal
 import importlib.machinery
 import importlib.util
 from pathlib import Path
@@ -69,6 +71,41 @@ class Publication(unittest.TestCase):
         result = self.run_candidate()
         self.assertEqual(result["status"], "FAIL")
         self.assertFalse(self.archive.exists())
+
+    def test_source_metadata_captured_before_rotation(self):
+        os.chmod(self.active, 0o666)
+        stamp = 1794556800123456789
+        os.utime(self.active, ns=(stamp, stamp))
+        st = self.active.stat()
+        original_scan = os.scandir
+        result = self.run_candidate(after_capture=lambda: append(self.active, {"id": 4}, 1))
+        self.assertEqual(result["status"], "OK", result)
+        self.assertIs(os.scandir, original_scan)
+        with tarfile.open(self.archive) as tar:
+            m = tar.getmember(f"Atlas/{GROUP}/{NAME}")
+            self.assertEqual((m.uid, m.gid, m.mode), (st.st_uid, st.st_gid, stat.S_IMODE(st.st_mode)))
+            self.assertEqual(int(Decimal(m.pax_headers["mtime"]) * 10**9), st.st_mtime_ns)
+
+    def test_metadata_mismatch_no_publish(self):
+        def gate(tar, prefix, expected):
+            changed = {n: dict(m) for n, m in expected.items()}
+            changed[NAME]["uid"] += 1
+            verify_members(tar, prefix, changed)
+        self.assertEqual(self.run_candidate(gate=gate)["status"], "FAIL")
+        self.assertFalse(self.archive.exists())
+
+    def test_symlink_inputs_no_publish(self):
+        for path in (self.active.with_name(NAME+".lock"), self.active,
+                     next(self.active.parent.glob("*.archive"))):
+            with self.subTest(path=path):
+                original = path.with_name(path.name + ".saved")
+                path.rename(original)
+                path.symlink_to(original)
+                self.assertEqual(self.run_candidate()["status"], "FAIL")
+                self.assertFalse(self.archive.exists())
+                self.report.unlink()
+                path.unlink()
+                original.rename(path)
 
     def crash_at(self, point):
         pid = os.fork()
