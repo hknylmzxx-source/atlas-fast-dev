@@ -2,6 +2,7 @@
 import fcntl
 import json
 import os
+import re
 from pathlib import Path
 import stat
 import tempfile
@@ -27,9 +28,20 @@ def append(path, row, limit, *, writer_uid, legacy_uid, gid, mode):
             src = os.fstat(active.fileno())
             if src.st_uid not in {writer_uid, legacy_uid} or (src.st_gid, stat.S_IMODE(src.st_mode)) != (gid, mode):
                 raise PermissionError("unapproved source metadata")
-            archives = list(path.parent.glob(path.name + ".*.archive"))
-            same = [p for p in archives if not p.is_symlink() and p.stat().st_ino == src.st_ino
-                    and p.stat().st_dev == src.st_dev]
+            pattern = re.compile(re.escape(path.name) + r"\.(\d{20})\.[0-9a-f]{32}\.archive")
+            same, latest = [], -1
+            for item in path.parent.iterdir():
+                if not (item.name.startswith(path.name + ".") and item.name.endswith(".archive")):
+                    continue
+                match = pattern.fullmatch(item.name)
+                if match is None:
+                    raise ValueError("noncanonical archive name")
+                st = item.lstat()
+                if not stat.S_ISREG(st.st_mode):
+                    raise ValueError("nonregular archive")
+                latest = max(latest, int(match[1]))
+                if (st.st_dev, st.st_ino) == (src.st_dev, src.st_ino):
+                    same.append(item)
             if len(same) > 1:
                 raise ValueError("duplicate interrupted rotation links")
             if not same and (not src.st_size or src.st_size + len(data) <= limit):
@@ -52,7 +64,10 @@ def append(path, row, limit, *, writer_uid, legacy_uid, gid, mode):
                     new.flush()
                     os.fsync(new.fileno())
                 if not same:
-                    archive = path.with_name(f"{path.name}.{time.time_ns():020d}.{uuid4().hex}.archive")
+                    generation = max(time.time_ns(), latest + 1)
+                    if generation >= 10**20:
+                        raise ValueError("archive generation overflow")
+                    archive = path.with_name(f"{path.name}.{generation:020d}.{uuid4().hex}.archive")
                     os.link(path, archive, follow_symlinks=False)
                 # Active pathname never disappears. The old inode and metadata remain in archive.
                 os.replace(tmp, path)
