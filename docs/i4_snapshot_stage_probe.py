@@ -47,7 +47,7 @@ with tempfile.TemporaryDirectory() as d:
         candidate = build(label)
         try:
             with tarfile.open(candidate, "r:gz") as tar:
-                verify_members(tar, prefix, expected)
+                verify_members(tar, prefix, expected, content_only=True)
         except ValueError as e:
             assert not ok and str(e)=="I4 snapshot missing or changed expected parts"
         else:
