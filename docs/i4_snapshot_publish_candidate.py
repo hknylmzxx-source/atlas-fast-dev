@@ -5,6 +5,8 @@ import os
 from pathlib import Path
 import tarfile
 import tempfile
+from decimal import Decimal
+from types import FunctionType
 
 from i4_snapshot_stage_candidate import freeze, verify_members
 
@@ -84,11 +86,39 @@ def build_verified(v4, root, output, report, *, thresholds=None, required=(),
                 with original_scan(stage) as entries:
                     return [*live, *(e for e in entries if e.name in frozen)]
 
-            try:
-                v4.os.scandir = scan
-                raw = v4.build(root, archive, internal, thresholds, required, owner_private=owner_private)
-            finally:
-                v4.os.scandir = original_scan
+            class OSView:
+                def __getattr__(self, name):
+                    return getattr(v4.os, name)
+
+                scandir = staticmethod(scan)
+
+            class TarView:
+                def __getattr__(self, name):
+                    return getattr(v4.tarfile, name)
+
+                def open(self, *args, **kwargs):
+                    obj = v4.tarfile.open(*args, **kwargs)
+                    if len(args) < 2 or not args[1].startswith("w"):
+                        return obj
+                    gettarinfo = obj.gettarinfo
+
+                    def info(path, arcname=None):
+                        ti = gettarinfo(path, arcname=arcname)
+                        p = Path(path)
+                        if p.parent == stage and p.name in expected:
+                            m = expected[p.name]
+                            ti.mode, ti.uid, ti.gid = m["mode"], m["uid"], m["gid"]
+                            ti.uname = ti.gname = ""
+                            ti.pax_headers["mtime"] = format(Decimal(m["mtime_ns"]).scaleb(-9), "f")
+                        return ti
+
+                    obj.gettarinfo = info
+                    return obj
+
+            # Inject dependencies into this invocation only. No global os patch.
+            namespace = dict(v4.build.__globals__, os=OSView(), tarfile=TarView())
+            build = FunctionType(v4.build.__code__, namespace, argdefs=v4.build.__defaults__)
+            raw = build(root, archive, internal, thresholds, required, owner_private=owner_private)
             result = dict(raw, status="FAIL", final_archive=None, archive_sha256=None)
             if raw["status"] not in {"OK", "PARTIAL"}:
                 raise ValueError("v4 candidate not publishable")
