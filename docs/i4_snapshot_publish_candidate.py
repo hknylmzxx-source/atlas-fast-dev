@@ -8,6 +8,7 @@ import tempfile
 from decimal import Decimal
 from types import FunctionType
 
+from i4_cloud_gate_candidate import grant_macos_reader
 from i4_snapshot_stage_candidate import freeze, verify_members
 
 GROUP = "FAST_SIGNAL_LIVE_PILOT"
@@ -23,7 +24,7 @@ def fsync_dir(path):
         os.close(fd)
 
 
-def publish_report(report, result):
+def publish_report(report, result, grant=None):
     """Publish only a fully written report, without replacing an existing report."""
     fd, name = tempfile.mkstemp(prefix=".i4-report-", dir=report.parent)
     staged = Path(name)
@@ -32,19 +33,25 @@ def publish_report(report, result):
             json.dump(result, f, ensure_ascii=False, indent=2)
             f.flush()
             os.fsync(f.fileno())
+        if grant:
+            grant(staged)
+            with staged.open("rb") as f:
+                os.fsync(f.fileno())
         os.link(staged, report)
         fsync_dir(report.parent)
     finally:
         staged.unlink(missing_ok=True)
 
 
-def publish_pair(archive, output, report, result, checkpoint=None):
+def publish_pair(archive, output, report, result, checkpoint=None, grant=None):
     """Report first. The final archive name is the commit marker."""
+    if grant:
+        grant(archive)
     with archive.open("rb") as f:
         os.fsync(f.fileno())
     if checkpoint:
         checkpoint("before_report")
-    publish_report(report, result)
+    publish_report(report, result, grant)
     if checkpoint:
         checkpoint("after_report")
     os.link(archive, output)
@@ -54,7 +61,7 @@ def publish_pair(archive, output, report, result, checkpoint=None):
 
 
 def build_verified(v4, root, output, report, *, thresholds=None, required=(),
-                   owner_private=(), after_capture=None, gate=verify_members, checkpoint=None):
+                   owner_private=(), after_capture=None, gate=verify_members, checkpoint=None, cloud_reader_uid=None):
     root, output, report = (Path(p).resolve() for p in (root, output, report))
     if any(p == root or root in p.parents for p in (output, report)):
         raise ValueError("output and report must be outside source root")
@@ -137,5 +144,6 @@ def build_verified(v4, root, output, report, *, thresholds=None, required=(),
         # After a report is committed, never remove or overwrite an archive
         # from this path. An interruption may leave an orphan report, not an
         # unverified final archive. Existing names require a new run identity.
-        publish_pair(archive, output, report, ready, checkpoint)
+        grant = None if cloud_reader_uid is None else lambda path: grant_macos_reader(path, cloud_reader_uid)
+        publish_pair(archive, output, report, ready, checkpoint, grant)
         return ready
