@@ -1,4 +1,8 @@
 """Test promotion using a copy of the installed snapshot v4 module."""
+import hashlib
+import json
+import os
+import signal
 import importlib.machinery
 import importlib.util
 from pathlib import Path
@@ -65,6 +69,49 @@ class Publication(unittest.TestCase):
         result = self.run_candidate()
         self.assertEqual(result["status"], "FAIL")
         self.assertFalse(self.archive.exists())
+
+    def crash_at(self, point):
+        pid = os.fork()
+        if pid == 0:
+            def checkpoint(current):
+                if current == point:
+                    os.kill(os.getpid(), signal.SIGKILL)
+            try:
+                self.run_candidate(checkpoint=checkpoint)
+            finally:
+                os._exit(91)
+        _, status = os.waitpid(pid, 0)
+        self.assertTrue(os.WIFSIGNALED(status))
+        self.assertEqual(os.WTERMSIG(status), signal.SIGKILL)
+
+    def test_kill_before_report_leaves_no_public_names(self):
+        self.crash_at("before_report")
+        self.assertFalse(self.report.exists())
+        self.assertFalse(self.archive.exists())
+
+    def test_kill_after_report_leaves_no_cloud_visible_archive(self):
+        self.crash_at("after_report")
+        data = json.loads(self.report.read_text())
+        self.assertEqual(data["status"], "OK")
+        self.assertIn("must exist", data["publication_rule"])
+        self.assertFalse(self.archive.exists())
+        self.assertEqual(list(self.base.glob("Atlas_*.tar.gz")), [])
+
+    def test_kill_after_archive_leaves_valid_report_and_archive(self):
+        self.crash_at("after_archive")
+        data = json.loads(self.report.read_text())
+        self.assertEqual(data["final_archive"], str(self.archive))
+        self.assertEqual(data["archive_sha256"], hashlib.sha256(self.archive.read_bytes()).hexdigest())
+
+    def test_conflicting_archive_after_report_is_never_overwritten(self):
+        def compete(point):
+            if point == "after_report":
+                self.archive.write_bytes(b"other process")
+        with self.assertRaises(FileExistsError):
+            self.run_candidate(checkpoint=compete)
+        self.assertEqual(self.archive.read_bytes(), b"other process")
+        self.assertNotEqual(json.loads(self.report.read_text())["archive_sha256"],
+                            hashlib.sha256(self.archive.read_bytes()).hexdigest())
 
 
 if __name__ == "__main__":
