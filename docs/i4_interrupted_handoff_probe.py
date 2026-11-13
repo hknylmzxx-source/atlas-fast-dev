@@ -65,3 +65,26 @@ with tempfile.TemporaryDirectory() as temp:
                           required=[GROUP])["status"] == "FAIL"
     assert not rejected.exists()
     print("PASS interrupted alias counted once, backup contains one copy, recovery retains both records, anomalous archive duplicates rejected")
+
+with tempfile.TemporaryDirectory() as temp:
+    p = Path(temp) / NAME
+    p.write_bytes(b'{"id":0}\n')
+    p.with_name(NAME + ".lock").touch()
+    st = p.stat()
+    policy = dict(writer_uid=os.getuid(), legacy_uid=os.getuid(), gid=st.st_gid,
+                  mode=stat.S_IMODE(st.st_mode))
+    malformed = p.with_name(NAME + ".malformed.archive")
+    os.link(p, malformed)
+    try:
+        append(p, {"id": 1}, 1, **policy)
+    except ValueError as e:
+        assert "noncanonical archive" in str(e)
+    else:
+        raise AssertionError("malformed alias accepted")
+    assert os.path.samefile(p, malformed)
+    malformed.unlink()
+    for stamp, value in [(100, 1), (100, 2), (50, 3)]:
+        with patch("i4_writer_handoff_candidate.time.time_ns", return_value=stamp):
+            append(p, {"id": value}, 1, **policy)
+    assert [json.loads(row)["id"] for row in event_lines(p)] == [0, 1, 2, 3]
+    print("PASS malformed alias rejected and repeated or reversed clock preserves order")
