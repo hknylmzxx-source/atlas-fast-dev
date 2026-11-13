@@ -14,7 +14,7 @@ class CloudJob(unittest.TestCase):
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
-        self.base = Path(tmp.name)
+        self.base = Path(tmp.name).resolve()
         self.src, self.dst, self.stage = [self.base / n for n in ("src", "dst", "stage")]
         for p in (self.src, self.dst, self.stage, self.src / "raporlar"):
             p.mkdir()
