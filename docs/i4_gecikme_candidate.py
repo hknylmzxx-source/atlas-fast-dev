@@ -7,6 +7,18 @@ from pathlib import Path
 from contextlib import ExitStack
 import fcntl
 import re
+import stat
+
+def open_regular(path):
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise ValueError("nonregular log input")
+        return os.fdopen(fd, "rb")
+    except BaseException:
+        os.close(fd)
+        raise
+
 
 def event_lines(path):
     """Snapshot the archive list and byte boundaries, without writing a lock file."""
@@ -14,10 +26,10 @@ def event_lines(path):
     pattern = re.compile(re.escape(path.name) + r"\.\d{20}\.[0-9a-f]{32}\.archive")
     with ExitStack() as stack:
         try:
-            lock = stack.enter_context(lock_path.open("rb"))
+            lock = stack.enter_context(open_regular(lock_path))
         except FileNotFoundError:
             # Legacy reader before coordinated rotation is installed.
-            active = stack.enter_context(path.open("rb"))
+            active = stack.enter_context(open_regular(path))
             if lock_path.exists() or any(pattern.fullmatch(p.name) for p in path.parent.iterdir()):
                 raise RuntimeError("rotation lock missing or initialized during read, retry")
             yield from active
@@ -25,10 +37,21 @@ def event_lines(path):
         fcntl.flock(lock, fcntl.LOCK_SH)
         try:
             archives = sorted(p for p in path.parent.iterdir() if pattern.fullmatch(p.name))
-            parts = []
-            for part in (*archives, path):
-                f = stack.enter_context(part.open("rb"))
-                parts.append((f, os.fstat(f.fileno()).st_size))
+            active = stack.enter_context(open_regular(path))
+            active_stat = os.fstat(active.fileno())
+            active_key = (active_stat.st_dev, active_stat.st_ino)
+            parts, seen = [], set()
+            for part in archives:
+                with open_regular(part) as f:
+                    st = os.fstat(f.fileno())
+                    key = (st.st_dev, st.st_ino)
+                    if key in seen:
+                        raise ValueError("duplicate archive inode")
+                    seen.add(key)
+                    if key != active_key:
+                        pinned = stack.enter_context(os.fdopen(os.dup(f.fileno()), "rb"))
+                        parts.append((pinned, st.st_size))
+            parts.append((active, active_stat.st_size))
         finally:
             fcntl.flock(lock, fcntl.LOCK_UN)
         for f, remaining in parts:
